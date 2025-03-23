@@ -1,0 +1,15 @@
+---
+title: "531_final"
+author: "Nick Kim"
+date: "2025-03-23"
+output: pdf_document
+---
+
+```{r}
+draft_dat <- read.csv("/Users/nicholaskim/Documents/STAT-531/final/data/draft_history.csv")
+team_rec <- read.csv("/Users/nicholaskim/Documents/STAT-531/final/data/Team_Records.csv")
+```
+
+```{r}
+
+```
