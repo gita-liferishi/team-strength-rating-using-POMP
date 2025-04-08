@@ -84,6 +84,33 @@ matchups$ELO_H <- elo_h
 ```
 
 ```{r}
-matchups[(matchups$Visitor=="Houston Rockets")|(matchups$Home=="Houston Rockets"),]
+rockets_matchups<-matchups[(matchups$Visitor=="Houston Rockets")|(matchups$Home=="Houston Rockets"),]
+rockets_matchups
 ```
+```{r}
+n <- nrow(r_23)
+rockets_elo_df <- data.frame(date = as.Date(rep(NA, n)), elo = rep(NA, n))
+row_counter <- 1
+
+for (i in 1:n) {
+  if (r_23[i, 3] == "Houston Rockets") {
+    rockets_elo_df[row_counter, ] <- list(as.Date(r_23[[i, 2]],format = "%a, %b %d, %Y"), as.numeric(r_23[i, 9]))
+    row_counter <- row_counter + 1
+  } else if (r_23[i, 5] == "Houston Rockets") {
+    rockets_elo_df[row_counter, ] <- list(as.Date(r_23[[i, 2]],format = "%a, %b %d, %Y"), as.numeric(r_23[i, 10]))
+    row_counter <- row_counter + 1
+  }
+}
+
+# Remove unused rows
+rockets_elo_df <- rockets_elo_df[1:(row_counter - 1), ]
+
+```
+
+```{r}
+library(ggplot2)
+
+ggplot(rockets_elo_df,aes(date,elo))+geom_line()
+```
+
 
