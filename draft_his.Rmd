@@ -112,5 +112,19 @@ library(ggplot2)
 
 ggplot(rockets_elo_df,aes(date,elo))+geom_line()
 ```
+```{r}
+length(diff(log(rockets_elo_df$elo)))
+```
 
+```{r}
+bpm <- read_excel("/Users/nicholaskim/Documents/STAT-531/final/data/BPM.xls")
+
+bpm["elo"] <- rockets_elo_df$elo
+
+mod<-lm(elo ~ `Total BPM`+Home+`Last 5 Games BPM`, data = bpm)
+bpm["fitted"] <- mod$fitted.values
+
+ggplot(bpm,aes(x=Date,y=elo))+geom_point()+
+  geom_line(aes(y=fitted))
+```
 
