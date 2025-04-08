@@ -8,14 +8,13 @@ output: pdf_document
 ```{r}
 library(readxl)
 draft_dat <- read.csv("/Users/nicholaskim/Documents/STAT-531/final/data/draft_history.csv")
-team_rec <- read.csv("/Users/nicholaskim/Documents/STAT-531/final/data/Team_Records.csv")
 matchups <- read_excel("/Users/nicholaskim/Documents/STAT-531/final/data/matchups.xlsx")
 ```
 
 ```{r}
 library(dplyr)
 draft_dat[draft_dat$round_number==1,] %>% 
-  filter(team_id==1610612760) %>% 
+  filter(team_id==1610612745) %>% 
   filter(season >= 2021) %>% 
   group_by(team_id,season) %>% 
   summarise(Total = sum(round_number))
@@ -85,6 +84,6 @@ matchups$ELO_H <- elo_h
 ```
 
 ```{r}
-matchups[(matchups$Visitor=="Oklahoma City Thunder")|(matchups$Home=="Oklahoma City Thunder"),]
+matchups[(matchups$Visitor=="Houston Rockets")|(matchups$Home=="Houston Rockets"),]
 ```
 
