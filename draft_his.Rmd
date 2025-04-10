@@ -178,21 +178,37 @@ Simple POMP model approach:
 library(pomp)
 
 rproc <- Csnippet("
-  team_strength += drift * (team_strength + last5_bpm) + rnorm(0, sigma);
-")
-
-dmeas <- Csnippet("
-  double p = exp(home_court_avd + team_strength - opp_strength) / (1 + exp(home_court_avd + team_strength - opp_strength));
-  lik = dbinom(Win, 1, p, give_log);
-  if (Win == 1) {
+  team_strength += beta1 *last5_bpm - alpha * (team_strength - 1500)  + rnorm(0, sigma);
+  
+  double p_win = 1.0 / (1.0 + pow(10, (opp_strength - team_strength) / 400));
+  int sim_win = rbinom(1, p_win); 
+  
+  if (sim_win == 1) {
     team_strength += 20 * (1 - 1/(1+pow(10, (opp_strength - team_strength)/400)));  
   } else {
     team_strength -= 20 * (1 - 1/(1+pow(10, (opp_strength - team_strength)/400)));  
   }
 ")
 
+dmeas <- Csnippet("
+double p;
+  if (home == 1){
+  p = exp(home_court_avd + team_strength - opp_strength) / (1 + exp(home_court_avd + team_strength - opp_strength));
+  }
+  else{
+  p = exp(team_strength - opp_strength) / (1 + exp(team_strength - opp_strength));
+  }
+  lik = dbinom(Win, 1, p, give_log);
+")
+
 rmeas <- Csnippet("
-  double p = exp(home_court_avd + team_strength - opp_strength) / (1 + exp(home_court_avd + team_strength - opp_strength));
+double p;
+  if (home == 1){
+  p = exp(home_court_avd + team_strength - opp_strength) / (1 + exp(home_court_avd + team_strength - opp_strength));
+  }
+  else{
+  p = exp(team_strength - opp_strength) / (1 + exp(team_strength - opp_strength));
+  }
   Win = rbinom(1, p);
 ")
 
@@ -208,22 +224,32 @@ nba_pomp <- pomp(
   dmeasure = dmeas,
   rinit = init,
   statenames = "team_strength",
-  paramnames = c("drift", "sigma", "home_court_avd"),
+  paramnames = c("beta1", "sigma", "home_court_avd","alpha"),
   covar = covariate_table(
     times = bpm$time,
     last5_bpm = bpm$`Last 5 Games BPM`,
-    opp_strength = bpm$opp_elo
+    opp_strength = bpm$opp_elo,
+    home = bpm$Home
   ),
-  covarnames = c("last5_bpm","opp_strength")
+  covarnames = c("last5_bpm","opp_strength","home")
 )
 ```
 
 ```{r}
-home_court_avd <- .6
-opp_strength <- 1600
-team_strength <- 1900
-p <- exp(home_court_avd + team_strength - opp_strength) / (1 + exp(home_court_avd + team_strength - opp_strength))
-rbinom(1, 1, prob=p)
+nba_pomp |>
+  simulate(
+    params=c(beta1=.2,sigma=1,home_court_avd=10,alpha=.2),
+    nsim=20,format="data.frame",include.data=TRUE
+  ) -> sims
+
+sims |>
+  ggplot(aes(x=time,y=team_strength,group=.id,color=.id=="data"))+
+  geom_line()+
+  geom_line(aes(x=time,y=elo))+
+  guides(color="none")
 ```
+
+
+
 
 
