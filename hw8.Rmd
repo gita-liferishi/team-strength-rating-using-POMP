@@ -1,21 +1,41 @@
 ---
-title: "531_final"
-author: "Nick Kim"
-date: "2025-03-23"
-output: pdf_document
+title: "Tracking team strength of Houston Rockets"
+author: "Suvro Mukherjee"
+date: "2025-04-13"
+output: html_document
 ---
 
-```{r}
+```{r setup, warning=FALSE, message=FALSE}
+library(tidyverse)
 library(readxl)
-draft_dat <- read.csv("/Users/nicholaskim/Documents/STAT-531/final/data/draft_history.csv")
-matchups <- read_excel("/Users/nicholaskim/Documents/STAT-531/final/data/matchups.xlsx")
+library(pomp)
+library(doFuture)
+library(future.apply)
+library(iterators)
+library(tsibble)
+library(fabletools)
+library(feasts)
+library(forecast)
 ```
 
-```{r}
+## Overview
+
+For the final project, our team analyses two seasons of the Houston Rockets and attempt to understand and model their performance in the NBA. The National Basketball Association (NBA) is a professional basketball league in North America, consisting of 30 teams. Each team plays 82 games in the regular season, with games scheduled over several months. In our analysis we track the progression of the team's ELO rating and the impact of statistics such as Box Plus-Minus(BPM) among others to gain an in-depth idea of modelling a certain basketball team's momentum. 
+
+Our data is sourced and scraped from the 'Basketball Reference' website which provides detailed game-by-game data.
+
+```{r data-load, echo = FALSE, warning=FALSE, message=FALSE}
+draft_dat <- read.csv("C:/Users/Suvrorup Mukherjee/Documents/U-M/Winter 25/STATS 531/Final Project/STAT531-Final/data/draft_history.csv")
+matchups <- read_excel("C:/Users/Suvrorup Mukherjee/Documents/U-M/Winter 25/STATS 531/Final Project/STAT531-Final/data/matchups.xlsx")
 team_ids <- unique(draft_dat[draft_dat$season>=2020,c(8,10)])
+head(matchups)
 ```
 
-```{r}
+### ELO Rating
+
+Elo ratings are a system originally developed for chess to rate player skill, but now widely used in sports (including the NBA). Each team starts with a base rating (e.g., 1500), and ratings are updated after each game based on the outcome and the opponent’s strength. Winning against a strong team boosts your rating more than beating a weaker team. As this metric is proportional to the team strength, we incorporate this as the principal observed process.
+
+```{r update-elo, warning=FALSE, message=FALSE}
 update_elo <- function(rating1, rating2, result, K = 20) {
   E1 <- 1 / (1 + 10^((rating2 - rating1) / 400))  # Expected score for team 1
   E2 <- 1 / (1 + 10^((rating1 - rating2) / 400))  # Expected score for team 2
@@ -34,7 +54,7 @@ update_elo <- function(rating1, rating2, result, K = 20) {
 ```
 
 
-```{r}
+```{r matchup-update, echo = FALSE, warning=FALSE, message=FALSE}
 # Initialize Elo ratings correctly
 elo_ratings <- data.frame(Team = unique(c(matchups$Visitor, matchups$Home)),
                           Elo = rep(1500, length(unique(c(matchups$Visitor, matchups$Home)))))
@@ -70,8 +90,8 @@ matchups$ELO_V <- elo_v
 matchups$ELO_H <- elo_h
 ```
 
-starting from 2023
-```{r}
+We analyze the data starting from the 2023 season.
+```{r elo-update-23, warning=FALSE, message=FALSE}
 elo_ratings <- data.frame(Team = unique(c(matchups$Visitor, matchups$Home)),
                           Elo = rep(1500, length(unique(c(matchups$Visitor, matchups$Home)))))
 
@@ -106,7 +126,8 @@ matchup23$ELO_V <- elo_v
 matchup23$ELO_H <- elo_h
 ```
 
-```{r}
+We subset the data to analyse the performance of the Houston Rockets from the 2023 season and integrate it with the aggregate BPM of the starting lineup:
+```{r rockets-subset, echo = FALSE, warning=FALSE, message=FALSE}
 rockets_matchups<-matchups[(matchups$Visitor=="Houston Rockets")|(matchups$Home=="Houston Rockets"),]
 rockets_matchups
 ```
@@ -132,23 +153,18 @@ for (i in 1:n) {
 # Remove unused rows
 rockets_elo_df <- rockets_elo_df[1:(row_counter - 1), ]
 
-```
-
-```{r}
-library(ggplot2)
-
-ggplot(rockets_elo_df,aes(date,elo))+geom_line()
-
 rockets_elo_df["time"] <- seq(1,161,by=1)
 #adding in initial elo at time 0
 inital <- data.frame(date = as.Date(10/24/2023,
   format = "%m/%d/%y"),elo=1500,opp_elo=1500,time=0)
 rockets_elo_df2 <- rbind(rockets_elo_df,inital)
-ggplot(rockets_elo_df2,aes(time,elo))+geom_line()
+# ggplot(rockets_elo_df2,aes(time,elo))+geom_line()
+
 ```
-trying a simple regression model
-```{r}
-bpm <- read_excel("/Users/nicholaskim/Documents/STAT-531/final/data/BPM.xls")
+
+
+```{r load-bpm, echo = FALSE, warning=FALSE, message=FALSE}
+bpm <- read_excel("C:/Users/Suvrorup Mukherjee/Documents/U-M/Winter 25/STATS 531/Final Project/STAT531-Final/data/BPM.xls")
 
 bpm["elo"] <- rockets_elo_df$elo
 bpm["time"] <- rockets_elo_df$time
@@ -160,12 +176,12 @@ ggplot(bpm,aes(x=time,y=elo))+geom_point()+
   geom_line(aes(y=fitted))
 ```
 
-tyring arma
-```{r}
-plot(bpm$time[-1],diff(log(bpm$elo)),type="l")
+Using ARMA modelling and analysis we find that the $ARIMA(2,O,2)$ best defines the data
+```{r arma, echo = FALSE, warning=FALSE, message=FALSE}
+#plot(bpm$time[-1],diff(log(bpm$elo)),type="l")
 acf(diff(log(bpm$elo)))
 ```
-```{r}
+```{r aic-table,  warning=FALSE, message=FALSE}
 aic_table <- function(data,P,Q){
 table <- matrix(NA,(P+1),(Q+1))
 for(p in 0:P) {
@@ -181,33 +197,30 @@ bpm_aic_table <- aic_table(log(bpm$elo),4,5)
 require(knitr)
 kable(bpm_aic_table,digits=2)
 ```
-```{r}
+```{r warning=FALSE, message=FALSE}
 library(forecast)
 arima_22 <- Arima(log(bpm$elo),order=c(2,1,2))
 arima_22
 ```
-```{r}
+```{r warning=FALSE, message=FALSE}
 polyroot(c(1,-coef(arima_22)[c("ar1","ar2")]))
 polyroot(c(1,-coef(arima_22)[c("ma1","ma2")]))
 ```
 
-```{r}
+```{r arma-plot, echo = FALSE, warning=FALSE, message=FALSE}
 plot(bpm$time,log(bpm$elo),type="l")
 lines(bpm$time,fitted(arima_22),col="blue")
 ```
 
-```{r}
+```{r arma-norm,echo = FALSE, warning=FALSE, message=FALSE}
 acf(arima_22$residuals)
 qqnorm(arima_22$residuals)
 qqline(arima_22$residuals, col = "steelblue", lwd = 2)
 ```
 
-```{r}
-library(lubridate)
-library(dplyr)
-library(tsibble)
-library(feasts)
-library(fabletools)
+
+We conduct a STL decomposition and analysis. As this data is event-based(date of games), we fill the irregular data to to support the decomposition.
+```{r stl, echo = FALSE, warning=FALSE, message=FALSE}
 bpm_filled <- bpm %>%
   arrange(Date) %>%
   mutate(Date = as.Date(Date)) %>%
@@ -222,12 +235,10 @@ decomp <- bpm_tsibble %>%
   components()
 autoplot(decomp)
 ```
-```
-Simple POMP model approach:
 
-```{r}
-library(pomp)
-library(dbplyr)
+In our POMP analysis, we also consider the BPM tally of the last 5 players and the opposition strength as these our relevant impacts to a team momentum. The pomp model approach:
+
+```{r pomp-define, warning=FALSE, message=FALSE}
 
 rproc <- Csnippet("
   team_strength += beta1 *last5_bpm - alpha * (team_strength - 1500)  + rnorm(0, sigma);
@@ -300,7 +311,7 @@ nba_pomp <- pomp(
 )
 ```
 
-```{r}
+```{r pomp-sim, warning=FALSE, message=FALSE}
 nba_pomp |>
   simulate(
     params=c(beta1=.5,sigma=1,home_court_avd=40,alpha=.05),
@@ -314,11 +325,8 @@ sims |>
   guides(color="none")
 ```
 
-local search
-```{r}
-library(doFuture)
-library(future.apply)
-library(iterators)
+Conducting local search:
+```{r local-search, warning=FALSE, message=FALSE}
 
 coef(nba_pomp) <- c(beta1=0.5, sigma=1, home_court_avd=40, alpha=0.05)
 fixed_params <- coef(nba_pomp,c("sigma"))
@@ -344,8 +352,9 @@ local_mifs_combined |>
   guides(color="none")+
   facet_wrap(~name,scales="free_y")
 ```
-global
-```{r}
+
+Conducting global search:
+```{r global-search, warning=FALSE, message=FALSE}
 set.seed(2062379496)
 runif_design(
 lower=c(beta1=0,home_court_avd=200,alpha=0),
@@ -370,5 +379,15 @@ foreach(guess=iter(guesses,"row"), .combine=rbind,
     bind_cols(loglik=ll[1],loglik.se=ll[2])
 } -> results
 
+results |>
+  pivot_longer(cols = c(beta1, home_court_avd, alpha, loglik),
+               names_to = "parameter", values_to = "value") |>
+  ggplot(aes(x = value)) +
+  geom_histogram(bins = 30, fill = "steelblue", color = "white") +
+  facet_wrap(~parameter, scales = "free", ncol = 2) +
+  theme_minimal() +
+  labs(title = "Global Search Results for MLE Estimates",
+       x = "Value", y = "Frequency")
+
 ```
-beta1 *last5_bpm - alpha * (team_strength - 1500)  + rnorm(0, sigma)
+
