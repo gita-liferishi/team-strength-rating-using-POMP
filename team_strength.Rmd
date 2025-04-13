@@ -12,10 +12,6 @@ matchups <- read_excel("/Users/nicholaskim/Documents/STAT-531/final/data/matchup
 ```
 
 ```{r}
-team_ids <- unique(draft_dat[draft_dat$season>=2020,c(8,10)])
-```
-
-```{r}
 update_elo <- function(rating1, rating2, result, K = 20) {
   E1 <- 1 / (1 + 10^((rating2 - rating1) / 400))  # Expected score for team 1
   E2 <- 1 / (1 + 10^((rating1 - rating2) / 400))  # Expected score for team 2
@@ -31,43 +27,6 @@ update_elo <- function(rating1, rating2, result, K = 20) {
   
   return(c(rating1_new, rating2_new))
 }
-```
-
-
-```{r}
-# Initialize Elo ratings correctly
-elo_ratings <- data.frame(Team = unique(c(matchups$Visitor, matchups$Home)),
-                          Elo = rep(1500, length(unique(c(matchups$Visitor, matchups$Home)))))
-
-# Compute game results
-matchups$Result <- ifelse(matchups$PTS_V > matchups$PTS_H, 1, 2)  
-
-elo_v <- c()
-elo_h <- c()
-
-# Loop through matchups to update Elo ratings
-for (i in 1:nrow(matchups)) {
-  team1 <- matchups$Visitor[i]
-  team2 <- matchups$Home[i]
-  
-  # Get current ratings using match()
-  rating1 <- elo_ratings$Elo[match(team1, elo_ratings$Team)]
-  rating2 <- elo_ratings$Elo[match(team2, elo_ratings$Team)]
-  
-  # Update Elo ratings
-  updated_ratings <- update_elo(rating1, rating2, matchups$Result[i])
-  
-  # Save updated ratings back into the data frame
-  elo_ratings$Elo[elo_ratings$Team == team1] <- updated_ratings[1]
-  elo_ratings$Elo[elo_ratings$Team == team2] <- updated_ratings[2]
-  
-  elo_v <- c(elo_v,updated_ratings[1])
-  elo_h <- c(elo_h,updated_ratings[2])
-  
-}
-
-matchups$ELO_V <- elo_v
-matchups$ELO_H <- elo_h
 ```
 
 starting from 2023
