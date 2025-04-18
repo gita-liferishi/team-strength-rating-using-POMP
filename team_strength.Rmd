@@ -7,7 +7,6 @@ output: pdf_document
 
 ```{r}
 library(readxl)
-draft_dat <- read.csv("/Users/nicholaskim/Documents/STAT-531/final/data/draft_history.csv")
 matchups <- read_excel("/Users/nicholaskim/Documents/STAT-531/final/data/matchups.xlsx")
 ```
 
@@ -185,7 +184,7 @@ decomp <- bpm_tsibble %>%
   components()
 autoplot(decomp)
 ```
-```
+
 Simple POMP model approach:
 
 ```{r}
@@ -510,6 +509,7 @@ foreach(guess=iter(guesses,"row"), .combine=rbind,
 ```{r}
 results2[results2$loglik == max(results2$loglik),]
 ```
+
 ```{r}
 nba_pomp2 |>
   simulate(
