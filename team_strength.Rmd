@@ -65,10 +65,6 @@ matchup23$ELO_H <- elo_h
 ```
 
 ```{r}
-rockets_matchups<-matchups[(matchups$Visitor=="Houston Rockets")|(matchups$Home=="Houston Rockets"),]
-rockets_matchups
-```
-```{r}
 #r_23 <- rockets_matchups[rockets_matchups$Season>=2023,]
 r_23 <- matchup23[(matchup23$Visitor=="Houston Rockets")|(matchup23$Home=="Houston Rockets"),]
 
@@ -97,7 +93,7 @@ library(ggplot2)
 
 ggplot(rockets_elo_df,aes(date,elo))+geom_line()
 
-rockets_elo_df["time"] <- seq(1,161,by=1)
+rockets_elo_df["time"] <- seq(1,164,by=1)
 #adding in initial elo at time 0
 inital <- data.frame(date = as.Date(10/24/2023,
   format = "%m/%d/%y"),elo=1500,opp_elo=1500,time=0)
@@ -112,7 +108,7 @@ bpm["elo"] <- rockets_elo_df$elo
 bpm["time"] <- rockets_elo_df$time
 bpm["opp_elo"] <- rockets_elo_df$opp_elo
 
-mod<-lm(elo ~ `Last 5 Games BPM`, data = bpm)
+mod<-lm(elo ~ `Last 5 Games BPM` + Home, data = bpm)
 bpm["fitted"] <- mod$fitted.values
 ggplot(bpm,aes(x=time,y=elo))+geom_point()+
   geom_line(aes(y=fitted))
@@ -228,7 +224,7 @@ double p;
   p = exp(home_court_avd + team_strength - opp_strength) / (1 + exp(home_court_avd + team_strength - opp_strength));
   }
   else{
-  p = exp(team_strength - opp_strength) / (1 + exp(team_strength - opp_strength));
+  p = exp(team_strength - (opp_strength + home_court_avd) ) / (1 + exp(team_strength - (opp_strength + home_court_avd)));
   }
   Win = rbinom(1, p);
 ")
@@ -279,8 +275,8 @@ sims |>
 trying to add opp_strength as a state
 ```{r}
 rproc2 <- Csnippet("
-  team_strength += beta1 *last5_bpm  + rnorm(0, sigma);
-  opp_strength += beta2 * opp5_bpm + rnorm(0, sigma);
+  team_strength += beta1 *last5_bpm  - alpha * (team_strength - 1500) + rnorm(0, sigma);
+  opp_strength += beta2 * opp5_bpm - alpha * (opp_strength - 1500) + rnorm(0, sigma);
   
   double p_win = 1.0 / (1.0 + pow(10, (opp_strength - team_strength) / 400));
   int sim_win = rbinom(1, p_win); 
@@ -316,7 +312,7 @@ double p;
   p = exp(home_court_avd + team_strength - opp_strength) / (1 + exp(home_court_avd + team_strength - opp_strength));
   }
   else{
-  p = exp(team_strength - opp_strength) / (1 + exp(team_strength - opp_strength));
+  p = exp(team_strength - (opp_strength + home_court_avd) ) / (1 + exp(team_strength - (opp_strength + home_court_avd)));
   }
   Win = rbinom(1, p);
 ")
@@ -337,7 +333,7 @@ nba_pomp2 <- pomp(
   dmeasure = dmeas2,
   rinit = init,
   statenames = c("team_strength","opp_strength"),
-  paramnames = c("beta1", "beta2","sigma", "home_court_avd"),
+  paramnames = c("beta1", "beta2","sigma", "home_court_avd","alpha"),
   covar = covariate_table(
     times = red_bpm2$time,
     last5_bpm = red_bpm2$`Last 5 Games BPM`,
@@ -351,7 +347,7 @@ nba_pomp2 <- pomp(
 ```{r}
 nba_pomp2 |>
   simulate(
-    params=c(beta1=.5,beta2=.5,sigma=1,home_court_avd=40),
+    params=c(beta1=.5,beta2=.5,sigma=1,home_court_avd=40,alpha=.05),
     nsim=20,format="data.frame",include.data=TRUE
   ) -> sims2
 
@@ -399,7 +395,7 @@ library(doFuture)
 library(future.apply)
 library(iterators)
 
-coef(nba_pomp2) <- c(beta1=0.5, beta2=.5,sigma=1, home_court_avd=40)
+coef(nba_pomp2) <- c(beta1=0.5, beta2=.5,sigma=1, home_court_avd=40,alpha=.05)
 fixed_params <- coef(nba_pomp2,c("sigma"))
 
 plan(multisession)
@@ -409,14 +405,14 @@ local_mifs2 <- future_lapply(future.seed=TRUE,seq_len(ncpu), function(i) {
     mif2(
       Np=700, Nmif=20,
       cooling.fraction.50=0.5,
-      rw.sd=rw_sd(beta1=0.5, home_court_avd=40, beta2=0.5)
+      rw.sd=rw_sd(beta1=0.5, home_court_avd=40, beta2=0.5,alpha=.05)
     )
 })
 
 local_mifs_combined2 <- do.call(c, local_mifs2)
 
 local_mifs_combined2 |>
-  traces(pars=c("loglik","beta1","beta2","sigma","home_court_avd")) |>
+  traces(pars=c("loglik","beta1","beta2","sigma","home_court_avd","alpha")) |>
   melt() |>
   ggplot(aes(x=iteration,y=value,group=.L1,color=factor(.L1)))+
   geom_line()+
@@ -460,7 +456,7 @@ running sim on the found best params
 ```{r}
 nba_pomp |>
   simulate(
-    params=c(beta1=4.221979,sigma=1,home_court_avd=152.4467,alpha=0.7078109),
+    params=c(beta1=1.644043,sigma=1,home_court_avd=85.28318,alpha=0.6171001),
     nsim=20,format="data.frame",include.data=TRUE
   ) -> sims
 
@@ -482,8 +478,8 @@ global with two states
 ```{r}
 set.seed(2062379496)
 runif_design(
-lower=c(beta1=0,home_court_avd=200,beta2=0),
-upper=c(beta1=1,home_court_avd=250,beta2=1),
+lower=c(beta1=0,home_court_avd=200,beta2=0,alpha=0),
+upper=c(beta1=1,home_court_avd=250,beta2=1,alpha=1),
 nseq=400
 ) -> guesses
 
@@ -513,7 +509,7 @@ results2[results2$loglik == max(results2$loglik),]
 ```{r}
 nba_pomp2 |>
   simulate(
-    params=c(beta1=0.3001256,beta2=-0.3188534,sigma=1,home_court_avd=100.6434),
+    params=c(beta1=1.251947,beta2=2.474494,sigma=1,home_court_avd=74.55269,alpha=0.8598805),
     nsim=20,format="data.frame",include.data=TRUE
   ) -> sims2
 
