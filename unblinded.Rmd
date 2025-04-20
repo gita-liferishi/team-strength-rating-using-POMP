@@ -12,9 +12,22 @@ output:
 
 ![Rockets SLAM Cover (Slam 254, 2025)](https://drive.google.com/uc?export=view&id=1pIHphgVGkqYD_Y30jos5B0bPQg4v1u3O)
 
+```{r setup, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(readxl)
+library(pomp)
+library(doFuture)
+library(future.apply)
+library(iterators)
+library(tsibble)
+library(fabletools)
+library(feasts)
+library(forecast)
+```
+
 ## Introduction
 
-Basketball, like all sports, is wildly unpredictable. A game filled with runs of hot and cold streaks, any team can win on a given night. However, in all this chaos is there is there an underlying truth? Are some teams just flat out better than another, and can we measure by how much? Luckily there is a traditional method to try and capture such a state, ELO. This simple and beautiful statistic, introduced by Arpad Elo, sets all teams or players at the same base rating and over time adjusts their score depending on the result of their game and how strong their opponent was (Wikipedia, 2025). However, this simple approach fails to account for the randomness of each event. A team could be having on off night, a crucial player could be injured or traded, all of which would alter their ELO rating on that given day. In this report we'll introduce what we'll call POMP-ELO which will try and remedy these concerns by focusing on modeling the team strength for the Houston Rockets. We'll walk you through our data preparation, our model selection as well as comparison to other baseline models, and finally a conclusion on our results. 
+Basketball, like all sports, is wildly unpredictable. A game filled with runs of hot and cold streaks, any team can win on a given night. However, in all this chaos is there is there an underlying truth? Are some teams just flat out better than another, and can we measure by how much? Luckily there is a traditional method to try and capture such a state, ELO. This simple yet beautiful statistic, introduced by Arpad Elo, sets all teams or players at the same base rating and over time adjusts their score depending on the result of their game and how strong their opponent was (Wikipedia, 2025). However, this simple approach fails to account for the randomness of each event. A team could be having on off night, a crucial player could get injured or traded, all of which would alter their ELO rating on that given day. In this report we'll introduce what we'll call POMP-ELO which will try and remedy these concerns by focusing on modeling the team strength for the Houston Rockets. We'll walk you through our data preparation, our model selection as well as comparison to other baseline models, and finally a conclusion on our results. 
 
 ## Data Preparation 
 
@@ -29,7 +42,6 @@ $$
 Where $TS$ is team strength and $OP$ opponent strength. Then we updated $TS$ depending on the result of the game, adding if they won and subtracting if they lost. Furthermore the K-factor, how sensitive ELO adjusts to new results, can be adjusted but we opted to use the results found by Australia Sports Tipping in 20 being the optimal value for basketball (Australia Sports Tipping, 2025).
 
 ```{r include=FALSE}
-library(readxl)
 matchups <- read_excel("/Users/nicholaskim/Documents/STAT-531/final/data/matchups.xlsx")
 ```
 
@@ -111,8 +123,6 @@ rockets_elo_df["time"] <- seq(1,164,by=1)
 
 The following ELO over time came out to look like
 ```{r echo=FALSE}
-library(ggplot2)
-
 #adding in initial elo at time 0
 inital <- data.frame(date = as.Date(10/24/2023,
   format = "%m/%d/%y"),elo=1500,opp_elo=1500,time=0)
@@ -146,7 +156,7 @@ This will become more clear in our POMP section but under the 2nd condition we'l
 
 ### Linear Regression 
 
-We define a linear regression model to serve as a baseline for understanding how Elo ratings relate to team performance indicators, independent of any latent process. The model is specified as:
+We'll define a linear regression model to serve as a baseline of our understanding how ELO ratings relate to team performance indicators, independent of any latent process. The model is specified as:
 
 $$
 \text{elo}_n = \gamma_0 + \gamma_1 \cdot LVBPM_n + \gamma_2 \cdot OLVBPM_n + \gamma_3 \cdot Home_n + \gamma_4 \cdot Win_n + \varepsilon_n
@@ -180,7 +190,7 @@ The baseline linear regression model estimates Elo ratings using observable team
 - The model explains 35.3% of the variance in Elo ($R^2 = 0.353$), suggesting that while observable features capture some structure, the remaining variation may be attributed to latent dynamics or factors not included in the model.
 
 ```{r echo=FALSE}
-plot(lm_elo)
+plot(lm_elo,sub.caption=" ")
 ```
 
 1. The residuals vs fitted plot shows no strong non-linearity, but there is noticeable heteroscedasticity and clustering, especially around the center. This suggests unaccounted structure in the residuals, likely from temporal correlation or hidden states that vary across time.
@@ -206,6 +216,54 @@ The residual diagnostics indicate that the linear model does not fit the Elo dat
 These observations suggest that a static linear regression is insufficient for modeling Elo, which is inherently time-dependent and recursively updated. This motivates the use of more appropriate models such as the POMP framework, which treats team strength as a latent process evolving over time, or ARIMA models, which directly account for autocorrelation and temporal structure in observed Elo scores.
 
 ### ARIMA
+
+Trying ARIMA fitting. To begin from our time plot of ELO we might be concerned with stationary leading to the choice of a log and 1st difference transformation to our data.
+```{r echo=FALSE}
+acfs<-acf(diff(log(bpm$elo)),plot=FALSE)
+plot(acfs,main="ACF of Transformed ELO")
+```
+
+From the plot it seems to indicate that there might be significant correlation in our data among time points with all but one lag being within the confidence interval thus failing to reject our null.
+
+Grid Search for model performance over different AR and MA's
+```{r aic-table,  warning=FALSE, message=FALSE}
+aic_table <- function(data,P,Q){
+table <- matrix(NA,(P+1),(Q+1))
+for(p in 0:P) {
+for(q in 0:Q) {
+table[p+1,q+1] <- arima(data,order=c(p,1,q))$aic
+}
+}
+dimnames(table) <- list(paste("AR",0:P, sep=""),
+paste("MA",0:Q,sep=""))
+table
+}
+bpm_aic_table <- aic_table(log(bpm$elo),4,5)
+require(knitr)
+kable(bpm_aic_table,digits=2)
+```
+From table we notice that ARMA(2,1,2) seems to be performing the best with AIC of -1188.47!
+
+Just as a sanity check lets see if the units lie within the unit circle showing convertibility.
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+arima_22 <- Arima(log(bpm$elo),order=c(2,1,2))
+plot(arima_22)
+```
+From the plot above we can see that they do in fact lie within the unit circle for AR but there might be some concerns with our MA as it is on the border of this boundary. 
+
+```{r arma-plot, echo = FALSE, warning=FALSE, message=FALSE}
+plot(bpm$time,log(bpm$elo),type="l",xlab="Time",ylab="Log ELO",main="Plot of Fitted ARIMA on Data")
+lines(bpm$time,fitted(arima_22),col="blue")
+```
+
+```{r arma-norm,echo = FALSE, warning=FALSE, message=FALSE}
+acf_res<-acf(arima_22$residuals,plot=FALSE)
+plot(acf_res,main="ACF Plot of Residuals")
+qqnorm(arima_22$residuals)
+qqline(arima_22$residuals, col = "steelblue", lwd = 2)
+```
+From these other preliminary plots it seems ARIMA might not be the best fit for this data. The QQ plot isn't surprising as the data itself was log transformed which explains the shape of our data. Perhaps there might be a better method?
+
 
 ## POMP 
 
@@ -251,11 +309,6 @@ $$
 ### Code
 
 Code under 1.
-
-```{r include=FALSE}
-library(pomp)
-library(dplyr)
-```
 
 ```{r}
 rproc <- Csnippet("
@@ -344,37 +397,6 @@ rproc2 <- Csnippet("
     team_strength -= 20 * (1 - 1/(1+pow(10, (opp_strength - team_strength)/400)));  
   }
 ")
-```
-
-```{r include=FALSE}
-dmeas2 <- Csnippet("
-  double p;
-  
-  double team_score = team_strength / 100.0;
-  double opp_score = opp_strength / 100.0;
-  double hca = home_court_avd / 100.0;
-
-  double max_val = fmax(team_score, opp_score);
-  
-  if (home == 1){
-    team_score += hca;
-  }
-  
-  p = exp(team_score - max_val) / (exp(team_score - max_val) + exp(opp_score - max_val));
-
-  lik = dbinom(Win, 1, p, give_log);
-")
-
-rmeas2 <- Csnippet("
-double p;
-  if (home == 1){
-  p = exp(home_court_avd + team_strength - opp_strength) / (1 + exp(home_court_avd + team_strength - opp_strength));
-  }
-  else{
-  p = exp(team_strength - (opp_strength + home_court_avd) ) / (1 + exp(team_strength - (opp_strength + home_court_avd)));
-  }
-  Win = rbinom(1, p);
-")
 
 init <- Csnippet("
   team_strength = 1500;
@@ -390,8 +412,8 @@ nba_pomp2 <- pomp(
   times = "time",
   t0 = 1,
   rprocess = euler(step.fun = rproc2, delta.t = 1),
-  rmeasure = rmeas2,
-  dmeasure = dmeas2,
+  rmeasure = rmeas,
+  dmeasure = dmeas,
   rinit = init,
   statenames = c("team_strength","opp_strength"),
   paramnames = c("beta1", "beta2","sigma", "home_court_avd","alpha"),
@@ -423,7 +445,8 @@ sims |>
   ggplot(aes(x=time,y=team_strength,group=.id,color=.id=="data"))+
   geom_line()+
   geom_line(aes(x=time,y=elo))+
-  guides(color="none")
+  guides(color="none")+
+  labs(title="Simulation Over Fixed Parameters For Model 1")
 ```
 
 Model 2
@@ -441,7 +464,8 @@ sims2 |>
   ggplot(aes(x=time,y=team_strength,group=.id,color=.id=="data"))+
   geom_line()+
   geom_line(aes(x=time,y=elo))+
-  guides(color="none")
+  guides(color="none")+
+  labs(title="Simulation Over Fixed Parameters For Model 2")
 ```
 
 
@@ -450,11 +474,6 @@ We can see that both models seem to capture the trend of the ELO with Model 1 ha
 ### Local Search 
 
 Model 1
-```{r include=FALSE}
-library(doFuture)
-library(future.apply)
-library(iterators)
-```
 
 ```{r echo=FALSE}
 coef(nba_pomp) <- c(beta1=0.5, sigma=1, home_court_avd=40, alpha=0.05)
@@ -576,12 +595,19 @@ results2[results2$loglik == max(results2$loglik),]
 
 ### Attendence Effect
 
-Home court advantage 
+As Students at UMich we know first hand that not all home fields are the same as how it's currently assumped in our POMP model. To account for this we'll try introducing Attendance metrics as a measure of the impact of a teams Home Field Advantage.
+
+```{r include=FALSE}
+bpm_att <- read_excel("/Users/nicholaskim/Documents/STAT-531/final/data/BPM-new.xlsx")
+
+bpm_att["elo"] <- rockets_elo_df$elo
+bpm_att["time"] <- rockets_elo_df$time
+bpm_att["opp_elo"] <- rockets_elo_df$opp_elo
+```
 
 Let us visualize how the Home and Attendance are related to each other and give a sense of team support
-```{r}
-bpm <- read_excel()
-ggplot(bpm, aes(x = factor(Home, labels = c("Away", "Home")), y = Attendance)) +
+```{r echo=FALSE}
+ggplot(bpm_att, aes(x = factor(Home, labels = c("Away", "Home")), y = Attendance)) +
     geom_boxplot(fill = "skyblue") +
     labs(x = "Game Location", y = "Attendance", title = "Attendance by Game Location")
 ```
@@ -589,15 +615,15 @@ ggplot(bpm, aes(x = factor(Home, labels = c("Away", "Home")), y = Attendance)) +
 Similarly, let us observe how the win can be affected using an interaction between the home and attendance through both ARMA and a linear regression model
 
 ```{r}
-model <- glm(Win ~ Home * log(Attendance), data = bpm, family = "binomial" )
+model <- glm(Win ~ Home * log(Attendance), data = bpm_att, family = "binomial" )
 summary(model)
 ```
 
 We add an interaction term as an exogenous variable to the arma model autoregressing on the elo
-```{r}
-bpm$home_attendance <- bpm$Home * bpm$Attendance
-arima_22 <- arima(log(bpm$elo),order=c(2,1,2), xreg = c(bpm$home_attendance))
-arima22
+```{r warning=FALSE}
+bpm_att$home_attendance <- bpm_att$Home * bpm_att$Attendance
+arima_22 <- arima(log(bpm_att$elo),order=c(2,1,2), xreg = c(bpm_att$home_attendance))
+arima_22
 ```
 
 Now let us finally update the rprocess and the pomp model accordingly. 
@@ -615,7 +641,7 @@ rproc_att <- Csnippet("
   }
 ")
 
-bpm %>% select(time,Win,Home,`Last 5 Games BPM`,opp_elo,elo, home_attendance) -> red_bpm_att
+bpm_att %>% select(time,Win,Home,`Last 5 Games BPM`,opp_elo,elo, home_attendance) -> red_bpm_att
 
 nba_pomp_att <- pomp(
     data = red_bpm_att,
@@ -642,7 +668,7 @@ nba_pomp_att <- pomp(
 ```
 
 Simulation
-```{r}
+```{r warning=FALSE}
 nba_pomp_att |>
     simulate(
         params=c(beta1=.5, beta2 = 0.1, sigma=1,home_court_avd=40,alpha=.05),
@@ -653,18 +679,19 @@ sims |>
     ggplot(aes(x=time,y=team_strength,group=.id,color=.id=="data"))+
     geom_line()+
     geom_line(aes(x=time,y=elo))+
-    guides(color="none")
+    guides(color="none")+
+    labs(title="Simulation Over Fixed Parameters Attendence POMP")
 ```
 
 Conducting Local Search:
 ```{r}
-coef(nba_pomp) <- c(beta1=0.5, beta2 =0.1, sigma=1, home_court_avd=40, alpha=0.05)
-fixed_params <- coef(nba_pomp,c("sigma"))
+coef(nba_pomp_att) <- c(beta1=0.5, beta2 =0.1, sigma=1, home_court_avd=40, alpha=0.05)
+fixed_params <- coef(nba_pomp_att,c("sigma"))
 
 plan(multisession)
 ncpu <- nbrOfWorkers()
 local_mifs <- future_lapply(future.seed=TRUE,seq_len(ncpu), function(i) {
-    nba_pomp |>
+    nba_pomp_att |>
         mif2(
             Np=700, Nmif=20,
             cooling.fraction.50=0.5,
@@ -686,7 +713,25 @@ local_mifs_combined |>
 
 ## Model Comparison
 
+Comparing Log Likelihoods for each model
+
+Our Baseline models:
+```{r echo=FALSE}
+sigma <- summary(lm_elo)$sigma
+sigma_lm <- sigma*sqrt((164-dim(model.matrix(lm_elo))[2])/164) 
+cat("Loglik for Linear Regression:",sum(log(dnorm(x = bpm$elo, mean = predict(mod), sd = sigma_lm))),"\n")
+cat("Loglik for ARIMA(2,1,2):",arima_22$loglik)
+```
+
+Our POMP Models
+```{r}
+cat("Loglik for POMP Model 1:", max(results$loglik),"\n")
+cat("Loglik for POMP Model 2:", max(results2$loglik))
+```
+
 ## Conclusion 
+
+
 
 ## References
 
