@@ -398,7 +398,7 @@ rproc2 <- Csnippet("
   }
 ")
 
-init <- Csnippet("
+init2 <- Csnippet("
   team_strength = 1500;
   opp_strength = 1500;
 ")
@@ -414,7 +414,7 @@ nba_pomp2 <- pomp(
   rprocess = euler(step.fun = rproc2, delta.t = 1),
   rmeasure = rmeas,
   dmeasure = dmeas,
-  rinit = init,
+  rinit = init2,
   statenames = c("team_strength","opp_strength"),
   paramnames = c("beta1", "beta2","sigma", "home_court_avd","alpha"),
   covar = covariate_table(
@@ -723,7 +723,7 @@ Our Baseline models:
 ```{r echo=FALSE}
 sigma <- summary(lm_elo)$sigma
 sigma_lm <- sigma*sqrt((164-dim(model.matrix(lm_elo))[2])/164) 
-cat("Loglik for Linear Regression:",sum(log(dnorm(x = bpm$elo, mean = predict(mod), sd = sigma_lm))),"\n")
+cat("Loglik for Linear Regression:",sum(log(dnorm(x = bpm$elo, mean = predict(lm_elo), sd = sigma_lm))),"\n")
 cat("Loglik for ARIMA(2,1,2):",arima_22$loglik)
 ```
 
