@@ -146,6 +146,65 @@ This will become more clear in our POMP section but under the 2nd condition we'l
 
 ### Linear Regression 
 
+We define a linear regression model to serve as a baseline for understanding how Elo ratings relate to team performance indicators, independent of any latent process. The model is specified as:
+
+$$
+\text{elo}_n = \gamma_0 + \gamma_1 \cdot LVBPM_n + \gamma_2 \cdot OLVBPM_n + \gamma_3 \cdot Home_n + \gamma_4 \cdot Win_n + \varepsilon_n
+$$
+
+where:
+
+- $elo_n$ is the observed Elo score of the team before game $n$  
+- $LVBPM_n$ is the team's average Total BPM over the last 5 games  
+- $OLVBPM_n$ is the opponent's average Total BPM over their last 5 games  
+- $Home_n$ is a binary indicator for whether the team played at home  
+- $Win_n$ is a binary indicator for whether the team won the game  
+- $\varepsilon_n$ is the residual error term  
+
+This model allows us to assess the direct linear contribution of observable variables to Elo scores without recursive updates or stochastic latent states, in contrast to the dynamic modeling used in the POMP framework.
+
+```{r, echo=FALSE, eval=FALSE}
+colnames(bpm)
+```
+
+```{r}
+lm_elo <- lm(elo ~ `Last 5 Games BPM` + `Opp Last5  BPM` + Home + Win, data = bpm)
+summary(lm_elo)
+```
+
+The baseline linear regression model estimates Elo ratings using observable team performance indicators:
+
+- Team recent performance (`Last 5 Games BPM`) is a strong and statistically significant predictor of Elo, with each point of BPM associated with an average increase of 3.94 Elo points ($p < 0.001$).
+- Winning the game also has a significant positive impact, associated with an average increase of 18.84 Elo points ($p = 0.004$).
+- Opponent's recent performance (`Opp Last5 BPM`) and home-court status are not statistically significant, indicating limited direct contribution to Elo in this linear framework.
+- The model explains 35.3% of the variance in Elo ($R^2 = 0.353$), suggesting that while observable features capture some structure, the remaining variation may be attributed to latent dynamics or factors not included in the model.
+
+```{r echo=FALSE}
+plot(lm_elo)
+```
+
+1. The residuals vs fitted plot shows no strong non-linearity, but there is noticeable heteroscedasticity and clustering, especially around the center. This suggests unaccounted structure in the residuals, likely from temporal correlation or hidden states that vary across time.
+
+This pattern supports the need for a time-dependent model like POMP or ARIMA, where past performance, dynamics, and latent factors can be explicitly modeled to capture the evolving nature of Elo.
+
+2. The Q-Q plot shows that the residuals are approximately normal, with slight deviations in the tails. This suggests that while the normality assumption mostly holds, there are some mild outliers or unmodeled structure at the extremes.
+
+This supports the earlier observation that a purely linear model may be too rigid, failing to capture dynamic effects or latent processes influencing Elo. It reinforces the motivation for a POMP model or ARIMA, which can better accommodate time-evolving shocks and nonlinear error behavior.
+
+```{r echo=FALSE}
+hist(residuals(lm_elo), main = "Residuals Histogram", xlab = "Residuals")
+
+plot(predict(lm_elo), bpm$elo,
+     main = "Predicted vs Actual Elo",
+     xlab = "Predicted Elo",
+     ylab = "Actual Elo")
+abline(0, 1, col = "red")
+```
+
+The residual diagnostics indicate that the linear model does not fit the Elo data well. The residuals range from approximately $-100$ to $+100$, suggesting substantial unexplained variation. The Residuals vs Fitted plot shows mild heteroscedasticity and scattered structure, while the Q-Q plot reveals slight deviations in the tails, pointing to the presence of outliers or latent dynamics not captured by the model.
+
+These observations suggest that a static linear regression is insufficient for modeling Elo, which is inherently time-dependent and recursively updated. This motivates the use of more appropriate models such as the POMP framework, which treats team strength as a latent process evolving over time, or ARIMA models, which directly account for autocorrelation and temporal structure in observed Elo scores.
+
 ### ARIMA
 
 ## POMP 
@@ -515,10 +574,129 @@ foreach(guess=iter(guesses,"row"), .combine=rbind,
 results2[results2$loglik == max(results2$loglik),]
 ```
 
+### Attendence Effect
+
+Home court advantage 
+
+Let us visualize how the Home and Attendance are related to each other and give a sense of team support
+```{r}
+bpm <- read_excel()
+ggplot(bpm, aes(x = factor(Home, labels = c("Away", "Home")), y = Attendance)) +
+    geom_boxplot(fill = "skyblue") +
+    labs(x = "Game Location", y = "Attendance", title = "Attendance by Game Location")
+```
+
+Similarly, let us observe how the win can be affected using an interaction between the home and attendance through both ARMA and a linear regression model
+
+```{r}
+model <- glm(Win ~ Home * log(Attendance), data = bpm, family = "binomial" )
+summary(model)
+```
+
+We add an interaction term as an exogenous variable to the arma model autoregressing on the elo
+```{r}
+bpm$home_attendance <- bpm$Home * bpm$Attendance
+arima_22 <- arima(log(bpm$elo),order=c(2,1,2), xreg = c(bpm$home_attendance))
+arima22
+```
+
+Now let us finally update the rprocess and the pomp model accordingly. 
+```{r}
+rproc_att <- Csnippet("
+  team_strength += beta1 *last5_bpm + beta2 * attendance_int - alpha * (team_strength - 1500)  + rnorm(0, sigma);
+  
+  double p_win = 1.0 / (1.0 + pow(10, (opp_strength - team_strength) / 400));
+  int sim_win = rbinom(1, p_win); 
+  
+  if (sim_win == 1) {
+    team_strength += 20 * (1 - 1/(1+pow(10, (opp_strength - team_strength)/400)));  
+  } else {
+    team_strength -= 20 * (1 - 1/(1+pow(10, (opp_strength - team_strength)/400)));  
+  }
+")
+
+bpm %>% select(time,Win,Home,`Last 5 Games BPM`,opp_elo,elo, home_attendance) -> red_bpm_att
+
+nba_pomp_att <- pomp(
+    data = red_bpm_att,
+    times = "time",
+    t0 = 1,
+    rprocess = euler(step.fun = rproc, delta.t = 1),
+    rmeasure = rmeas,
+    dmeasure = dmeas,
+    rinit = init,
+    statenames = "team_strength",
+    paramnames = c("beta1", "beta2", "sigma", "home_court_avd","alpha"),
+    partrans = parameter_trans(
+        log = c("alpha")
+    ),
+    covar = covariate_table(
+        times = red_bpm_att$time,
+        last5_bpm = red_bpm_att$`Last 5 Games BPM`,
+        opp_strength = red_bpm_att$opp_elo,
+        home = red_bpm_att$Home,
+        attendance_int = red_bpm_att$home_attendance
+    ),
+    covarnames = c("last5_bpm","opp_strength","home", "attendance_int")
+)
+```
+
+Simulation
+```{r}
+nba_pomp_att |>
+    simulate(
+        params=c(beta1=.5, beta2 = 0.1, sigma=1,home_court_avd=40,alpha=.05),
+        nsim=20,format="data.frame",include.data=TRUE
+    ) -> sims
+
+sims |>
+    ggplot(aes(x=time,y=team_strength,group=.id,color=.id=="data"))+
+    geom_line()+
+    geom_line(aes(x=time,y=elo))+
+    guides(color="none")
+```
+
+Conducting Local Search:
+```{r}
+coef(nba_pomp) <- c(beta1=0.5, beta2 =0.1, sigma=1, home_court_avd=40, alpha=0.05)
+fixed_params <- coef(nba_pomp,c("sigma"))
+
+plan(multisession)
+ncpu <- nbrOfWorkers()
+local_mifs <- future_lapply(future.seed=TRUE,seq_len(ncpu), function(i) {
+    nba_pomp |>
+        mif2(
+            Np=700, Nmif=20,
+            cooling.fraction.50=0.5,
+            rw.sd=rw_sd(beta1=0.5, beta2=0.1, home_court_avd=40, alpha=0.05)
+        )
+})
+
+local_mifs_combined <- do.call(c, local_mifs)
+
+local_mifs_combined |>
+    traces(pars=c("loglik","beta1","beta2","sigma","home_court_avd","alpha")) |>
+    melt() |>
+    ggplot(aes(x=iteration,y=value,group=.L1,color=factor(.L1)))+
+    geom_line()+
+    guides(color="none")+
+    facet_wrap(~name,scales="free_y")
+
+```
+
 ## Model Comparison
 
 ## Conclusion 
 
 ## References
 
+- “Basketball Statistics & History of Every Team & NBA and WNBA Players.” Basketball, www.basketball-reference.com/. Accessed 18 Apr. 2025. 
+- “Elo Rating System.” Wikipedia, Wikimedia Foundation, 29 Mar. 2025, en.wikipedia.org/wiki/Elo_rating_system. 
+“NBA - Elo Ratings.” Sports, www.aussportstipping.com/sports/nba/elo_ratings/#:~:text=If%20k%20is%20set%20too,the%20optimal%20k%20is%2020.&text=The%20same%20website%20also%20applied,their%20NFL%20Elo%20rating%20system. Accessed 18 Apr. 2025. 
+- Staff, SLAM. “Houston Rockets Cover Slam 254.” SLAM, 6 Feb. 2025, www.slamonline.com/the-magazine/slam-254/houston-rockets-254/. 
+- Ionides, Edward L. “Lesson 4.
+Iterated filtering: principles and practice” Iterated filtering Lecture. Iterated filtering Models Lecture, 22 Mar 2025, Ann Arbor, Michigan .
+- “The Bradley-Terry Model.” Lecture24. Lecture 24, autumn 2016, Stanford, California, https://web.stanford.edu/class/archive/stats/stats200/stats200.1172/Lecture24.pdf. Accessed 12 Apr. 2025. 
+- “Chatgpt.” ChatGPT, chatgpt.com/. Accessed 12 April. 2025.
+- 2022, Midterm Project, https://ionides.github.io/531w22/final_project/project03/blinded.pdf. Accessed 12 April. 2025. 
 
