@@ -484,7 +484,7 @@ ncpu <- nbrOfWorkers()
 local_mifs <- future_lapply(future.seed=TRUE,seq_len(ncpu), function(i) {
   nba_pomp |>
     mif2(
-      Np=700, Nmif=20,
+      Np=1000, Nmif=20,
       cooling.fraction.50=0.5,
       rw.sd=rw_sd(beta1=0.5, home_court_avd=40, alpha=0.05)
     )
@@ -513,7 +513,7 @@ ncpu <- nbrOfWorkers()
 local_mifs2 <- future_lapply(future.seed=TRUE,seq_len(ncpu), function(i) {
   nba_pomp2 |>
     mif2(
-      Np=700, Nmif=20,
+      Np=1000, Nmif=20,
       cooling.fraction.50=0.5,
       rw.sd=rw_sd(beta1=0.5, home_court_avd=40, beta2=0.5,alpha=.05)
     )
@@ -529,6 +529,8 @@ local_mifs_combined2 |>
   guides(color="none")+
   facet_wrap(~name,scales="free_y")
 ```
+
+From just these local searches we can see that Model 2 have more noisy estimates of the parameters which makes sense due to the extra randomness in its process. However, it's interesting to note that the alpha parameter still converges is a smooth manner like in Model 1.
 
 ### Global Search
 
@@ -552,7 +554,7 @@ foreach(guess=iter(guesses,"row"), .combine=rbind,
     mif2(Nmif=20) -> mf
   replicate(
   10,
-  mf |> pfilter(Np=700) |> logLik()
+  mf |> pfilter(Np=1000) |> logLik()
   ) |>
     logmeanexp(se=TRUE) -> ll
   mf |> coef() |> bind_rows() |>
@@ -583,7 +585,7 @@ foreach(guess=iter(guesses,"row"), .combine=rbind,
     mif2(Nmif=20) -> mf
   replicate(
   10,
-  mf |> pfilter(Np=700) |> logLik()
+  mf |> pfilter(Np=1000) |> logLik()
   ) |>
     logmeanexp(se=TRUE) -> ll
   mf |> coef() |> bind_rows() |>
@@ -622,11 +624,11 @@ summary(model)
 We add an interaction term as an exogenous variable to the arma model autoregressing on the elo
 ```{r warning=FALSE}
 bpm_att$home_attendance <- bpm_att$Home * bpm_att$Attendance
-arima_22 <- arima(log(bpm_att$elo),order=c(2,1,2), xreg = c(bpm_att$home_attendance))
-arima_22
+arima_22_att <- arima(log(bpm_att$elo),order=c(2,1,2), xreg = c(bpm_att$home_attendance))
+arima_22_att
 ```
 
-Now let us finally update the rprocess and the pomp model accordingly. 
+Now let us finally update the rprocess and the pomp model accordingly. Building off of Model 1 as its a simpler model. 
 ```{r}
 rproc_att <- Csnippet("
   team_strength += beta1 *last5_bpm + beta2 * attendance_int - alpha * (team_strength - 1500)  + rnorm(0, sigma);
@@ -647,7 +649,7 @@ nba_pomp_att <- pomp(
     data = red_bpm_att,
     times = "time",
     t0 = 1,
-    rprocess = euler(step.fun = rproc, delta.t = 1),
+    rprocess = euler(step.fun = rproc_att, delta.t = 1),
     rmeasure = rmeas,
     dmeasure = dmeas,
     rinit = init,
@@ -671,7 +673,7 @@ Simulation
 ```{r warning=FALSE}
 nba_pomp_att |>
     simulate(
-        params=c(beta1=.5, beta2 = 0.1, sigma=1,home_court_avd=40,alpha=.05),
+        params=c(beta1=.5, beta2 = 0.0001, sigma=1,home_court_avd=40,alpha=.05),
         nsim=20,format="data.frame",include.data=TRUE
     ) -> sims
 
@@ -683,9 +685,11 @@ sims |>
     labs(title="Simulation Over Fixed Parameters Attendence POMP")
 ```
 
+
+
 Conducting Local Search:
 ```{r}
-coef(nba_pomp_att) <- c(beta1=0.5, beta2 =0.1, sigma=1, home_court_avd=40, alpha=0.05)
+coef(nba_pomp_att) <- c(beta1=0.5, beta2 =0.0001, sigma=1, home_court_avd=40, alpha=0.05)
 fixed_params <- coef(nba_pomp_att,c("sigma"))
 
 plan(multisession)
@@ -693,9 +697,9 @@ ncpu <- nbrOfWorkers()
 local_mifs <- future_lapply(future.seed=TRUE,seq_len(ncpu), function(i) {
     nba_pomp_att |>
         mif2(
-            Np=700, Nmif=20,
+            Np=1000, Nmif=20,
             cooling.fraction.50=0.5,
-            rw.sd=rw_sd(beta1=0.5, beta2=0.1, home_court_avd=40, alpha=0.05)
+            rw.sd=rw_sd(beta1=0.5, beta2=0.0001, home_court_avd=40, alpha=0.05)
         )
 })
 
@@ -724,14 +728,20 @@ cat("Loglik for ARIMA(2,1,2):",arima_22$loglik)
 ```
 
 Our POMP Models
-```{r}
-cat("Loglik for POMP Model 1:", max(results$loglik),"\n")
-cat("Loglik for POMP Model 2:", max(results2$loglik))
+```{r echo=FALSE}
+cat("Loglik for POMP Model 1:", mean(results$loglik),"\n")
+cat("Loglik for POMP Model 2:", mean(results2$loglik))
 ```
+
+Just from the looks of the log likelihood's it seems ARIMA is a better performing model. However, we should be cautious as noted in the ARMIA section its poly roots for MA are on the unit circle meaning this estimate may be unstable.
+
+A positive in our POMP-ELO approach is that is offers a more granular approach in the effects that play into winning a basketball game which may be more realistic than the traditional ELO statistic. In addition, this approach seems to provide a better model fit in comparison to the simple linear regression approach which is a positive.
 
 ## Conclusion 
 
+In such a competitive and results driven world we are often enamored with the concept of ability. How am I doing compared to my peers and where do I rank? How good am I at performing my job; at my craft? Basketball is no exception. With the introduction of ELO we are able to grasp at this measure of team strength in all competitive sports. However, the world is random, its chaotic, two assumptions ELO fails to recognize. While POMP-ELO is by no measure a perfect solution, we feel from this report we've made a case that it offers an interesting yet still intuitive and effective result in filling in the gaps were ELO falls short. 
 
+There are certainty gaps in our report and modeling of ELO. One in that we are using simulated p to predicted the winner of each event. This might violate our latent state assumption as now there is a deterministic process using a process that should be unobservable. This might make the inference team_strength as strictly a latent state invalid but we feel it still offers an interesting perspective in terms of simulation. For this reason an interesting extension could be seeing the models performance in forecasting ELO for future events.
 
 ## References
 
