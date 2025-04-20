@@ -1,0 +1,248 @@
+---
+title: "Attendance-analysis"
+author: "Suvro Mukherjee"
+date: "2025-04-20"
+output: html_document
+---
+
+## Initial Code Setup, Data Read, Data Preprocess
+```{r}
+library(readxl)
+draft_dat <- read.csv("C:/Users/Suvrorup Mukherjee/Documents/U-M/Winter 25/STATS 531/Final Project/STAT531-Final/data/draft_history.csv")
+matchups <-  read_excel("C:/Users/Suvrorup Mukherjee/Documents/U-M/Winter 25/STATS 531/Final Project/STAT531-Final/data/matchups.xlsx")
+```
+
+```{r}
+update_elo <- function(rating1, rating2, result, K = 20) {
+  E1 <- 1 / (1 + 10^((rating2 - rating1) / 400))  # Expected score for team 1
+  E2 <- 1 / (1 + 10^((rating1 - rating2) / 400))  # Expected score for team 2
+  
+  if (result == 1) {  # Team 1 wins
+    rating1_new <- rating1 + K * (1 - E1)
+    rating2_new <- rating2 + K * (0 - E2)
+  } else {  # Team 2 wins
+    rating1_new <- rating1 + K * (0 - E1)
+    rating2_new <- rating2 + K * (1 - E2)
+    
+  } 
+  
+  return(c(rating1_new, rating2_new))
+}
+```
+
+starting from 2023
+```{r}
+elo_ratings <- data.frame(Team = unique(c(matchups$Visitor, matchups$Home)),
+                          Elo = rep(1500, length(unique(c(matchups$Visitor, matchups$Home)))))
+
+matchup23 <- matchups[matchups$Season>=2023,]
+matchup23$Result <- ifelse(matchup23$PTS_V > matchup23$PTS_H, 1, 2)  
+
+elo_v <- c()
+elo_h <- c()
+
+# Loop through matchups to update Elo ratings
+for (i in 1:nrow(matchup23)) {
+  team1 <- matchup23$Visitor[i]
+  team2 <- matchup23$Home[i]
+  
+  # Get current ratings using match()
+  rating1 <- elo_ratings$Elo[match(team1, elo_ratings$Team)]
+  rating2 <- elo_ratings$Elo[match(team2, elo_ratings$Team)]
+  
+  # Update Elo ratings
+  updated_ratings <- update_elo(rating1, rating2, matchup23$Result[i])
+  
+  # Save updated ratings back into the data frame
+  elo_ratings$Elo[elo_ratings$Team == team1] <- updated_ratings[1]
+  elo_ratings$Elo[elo_ratings$Team == team2] <- updated_ratings[2]
+  
+  elo_v <- c(elo_v,updated_ratings[1])
+  elo_h <- c(elo_h,updated_ratings[2])
+  
+}
+
+matchup23$ELO_V <- elo_v
+matchup23$ELO_H <- elo_h
+```
+
+```{r}
+rockets_matchups<-matchups[(matchups$Visitor=="Houston Rockets")|(matchups$Home=="Houston Rockets"),]
+rockets_matchups
+```
+
+
+```{r}
+#r_23 <- rockets_matchups[rockets_matchups$Season>=2023,]
+r_23 <- matchup23[(matchup23$Visitor=="Houston Rockets")|(matchup23$Home=="Houston Rockets"),]
+
+n <- nrow(r_23)
+rockets_elo_df <- data.frame(date = as.Date(rep(NA, n)), elo = rep(NA, n), opp_elo = rep(NA, n))
+row_counter <- 1
+
+for (i in 1:n) {
+  if (r_23[i, 3] == "Houston Rockets") {
+    rockets_elo_df[row_counter, ] <- list(as.Date(r_23[[i, 2]],format = "%a, %b %d, %Y"), as.numeric(r_23[i, 9]), as.numeric(r_23[i,10]))
+    row_counter <- row_counter + 1
+  } else if (r_23[i, 5] == "Houston Rockets") {
+    rockets_elo_df[row_counter, ] <- list(as.Date(r_23[[i, 2]],format = "%a, %b %d, %Y"), as.numeric(r_23[i, 10]),
+                                          as.numeric(r_23[i,9]))
+    row_counter <- row_counter + 1
+  }
+}
+
+# Remove unused rows
+rockets_elo_df <- rockets_elo_df[1:(row_counter - 1), ]
+
+```
+
+
+Reads updated data from BPM-new.csv which is updated with the Attendance values
+```{r}
+bpm <- read.csv("C:/Users/Suvrorup Mukherjee/Documents/U-M/Winter 25/STATS 531/Final Project/STAT531-Final/data/BPM-new.csv")
+
+bpm["elo"] <- rockets_elo_df$elo
+bpm["time"] <- rockets_elo_df$time
+bpm["opp_elo"] <- rockets_elo_df$opp_elo
+
+```
+
+Let us visualize how the Home and Attendance are related to each other and give a sense of team support
+```{r}
+ggplot(bpm, aes(x = factor(Home, labels = c("Away", "Home")), y = Attendance)) +
+    geom_boxplot(fill = "skyblue") +
+    labs(x = "Game Location", y = "Attendance", title = "Attendance by Game Location")
+```
+
+Similarly, let us observe how the win can be affected using an interaction between the home and attendance through both ARMA and a linear regression model
+
+```{r}
+model <- glm(Win ~ Home * log(Attendance), data = bpm, family = "binomial" )
+summary(model)
+```
+
+We add an interaction term as an exogenous variable to the arma model autoregressing on the elo
+```{r}
+bpm$home_attendance <- bpm$Home * bpm$Attendance
+arima_22 <- arima(log(bpm$elo),order=c(2,1,2), xreg = c(bpm$home_attendance))
+arima22
+```
+
+Now let us finally update the rprocess and the pomp model accordingly
+```{r promp}
+library(pomp)
+library(dbplyr)
+
+rproc <- Csnippet("
+  team_strength += beta1 *last5_bpm + beta2 * attendance_int - alpha * (team_strength - 1500)  + rnorm(0, sigma);
+  
+  double p_win = 1.0 / (1.0 + pow(10, (opp_strength - team_strength) / 400));
+  int sim_win = rbinom(1, p_win); 
+  
+  if (sim_win == 1) {
+    team_strength += 20 * (1 - 1/(1+pow(10, (opp_strength - team_strength)/400)));  
+  } else {
+    team_strength -= 20 * (1 - 1/(1+pow(10, (opp_strength - team_strength)/400)));  
+  }
+")
+
+dmeas <- Csnippet("
+  double p;
+  
+  double team_score = team_strength / 100.0;
+  double opp_score = opp_strength / 100.0;
+  double hca = home_court_avd / 100.0;
+
+  double max_val = fmax(team_score, opp_score);
+  
+  if (home == 1){
+    team_score += hca;
+  }
+  
+  p = exp(team_score - max_val) / (exp(team_score - max_val) + exp(opp_score - max_val));
+
+  lik = dbinom(Win, 1, p, give_log);
+")
+
+rmeas <- Csnippet("
+double p;
+  if (home == 1){
+  p = exp(home_court_avd + team_strength - opp_strength) / (1 + exp(home_court_avd + team_strength - opp_strength));
+  }
+  else{
+  p = exp(team_strength - opp_strength) / (1 + exp(team_strength - opp_strength));
+  }
+  Win = rbinom(1, p);
+")
+
+init <- Csnippet("
+  team_strength = 1500;
+")
+
+bpm %>% select(time,Win,Home,`Last 5 Games BPM`,opp_elo,elo, home_attendance) -> red_bpm
+
+nba_pomp <- pomp(
+    data = red_bpm,
+    times = "time",
+    t0 = 1,
+    rprocess = euler(step.fun = rproc, delta.t = 1),
+    rmeasure = rmeas,
+    dmeasure = dmeas,
+    rinit = init,
+    statenames = "team_strength",
+    paramnames = c("beta1", "beta2", "sigma", "home_court_avd","alpha"),
+    partrans = parameter_trans(
+        log = c("alpha")
+    ),
+    covar = covariate_table(
+        times = red_bpm$time,
+        last5_bpm = red_bpm$`Last 5 Games BPM`,
+        opp_strength = red_bpm$opp_elo,
+        home = red_bpm$Home,
+        attendance_int = red_bpm$home_attendance
+    ),
+    covarnames = c("last5_bpm","opp_strength","home", "attendance_int")
+)
+```
+
+```{r}
+nba_pomp |>
+    simulate(
+        params=c(beta1=.5, beta2 = 0.1, sigma=1,home_court_avd=40,alpha=.05),
+        nsim=20,format="data.frame",include.data=TRUE
+    ) -> sims
+
+sims |>
+    ggplot(aes(x=time,y=team_strength,group=.id,color=.id=="data"))+
+    geom_line()+
+    geom_line(aes(x=time,y=elo))+
+    guides(color="none")
+```
+
+Conducting Local Search:
+```{r}
+coef(nba_pomp) <- c(beta1=0.5, beta2 =0.1, sigma=1, home_court_avd=40, alpha=0.05)
+fixed_params <- coef(nba_pomp,c("sigma"))
+
+plan(multisession)
+ncpu <- nbrOfWorkers()
+local_mifs <- future_lapply(future.seed=TRUE,seq_len(ncpu), function(i) {
+    nba_pomp |>
+        mif2(
+            Np=700, Nmif=20,
+            cooling.fraction.50=0.5,
+            rw.sd=rw_sd(beta1=0.5, beta2=0.1, home_court_avd=40, alpha=0.05)
+        )
+})
+
+local_mifs_combined <- do.call(c, local_mifs)
+
+local_mifs_combined |>
+    traces(pars=c("loglik","beta1","beta2","sigma","home_court_avd","alpha")) |>
+    melt() |>
+    ggplot(aes(x=iteration,y=value,group=.L1,color=factor(.L1)))+
+    geom_line()+
+    guides(color="none")+
+    facet_wrap(~name,scales="free_y")
+
+```
