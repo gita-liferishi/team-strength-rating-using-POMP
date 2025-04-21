@@ -7,6 +7,7 @@ output: pdf_document
 
 ```{r}
 library(readxl)
+draft_dat <- read.csv("/Users/nicholaskim/Documents/STAT-531/final/data/draft_history.csv")
 matchups <- read_excel("/Users/nicholaskim/Documents/STAT-531/final/data/matchups.xlsx")
 ```
 
@@ -65,6 +66,10 @@ matchup23$ELO_H <- elo_h
 ```
 
 ```{r}
+rockets_matchups<-matchups[(matchups$Visitor=="Houston Rockets")|(matchups$Home=="Houston Rockets"),]
+rockets_matchups
+```
+```{r}
 #r_23 <- rockets_matchups[rockets_matchups$Season>=2023,]
 r_23 <- matchup23[(matchup23$Visitor=="Houston Rockets")|(matchup23$Home=="Houston Rockets"),]
 
@@ -93,7 +98,7 @@ library(ggplot2)
 
 ggplot(rockets_elo_df,aes(date,elo))+geom_line()
 
-rockets_elo_df["time"] <- seq(1,164,by=1)
+rockets_elo_df["time"] <- seq(1,161,by=1)
 #adding in initial elo at time 0
 inital <- data.frame(date = as.Date(10/24/2023,
   format = "%m/%d/%y"),elo=1500,opp_elo=1500,time=0)
@@ -108,15 +113,11 @@ bpm["elo"] <- rockets_elo_df$elo
 bpm["time"] <- rockets_elo_df$time
 bpm["opp_elo"] <- rockets_elo_df$opp_elo
 
-mod<-lm(elo ~ `Last 5 Games BPM` + Home, data = bpm)
+mod<-lm(elo ~ `Last 5 Games BPM`, data = bpm[bpm$time>0,])
 bpm["fitted"] <- mod$fitted.values
 ggplot(bpm,aes(x=time,y=elo))+geom_point()+
   geom_line(aes(y=fitted))
 ```
-```{r}
-summary(mod)
-```
-
 
 tyring arma
 ```{r}
@@ -180,12 +181,12 @@ decomp <- bpm_tsibble %>%
   components()
 autoplot(decomp)
 ```
-
+```
 Simple POMP model approach:
 
 ```{r}
 library(pomp)
-library(dplyr)
+library(dbplyr)
 
 rproc <- Csnippet("
   team_strength += beta1 *last5_bpm - alpha * (team_strength - 1500)  + rnorm(0, sigma);
@@ -224,7 +225,7 @@ double p;
   p = exp(home_court_avd + team_strength - opp_strength) / (1 + exp(home_court_avd + team_strength - opp_strength));
   }
   else{
-  p = exp(team_strength - (opp_strength + home_court_avd) ) / (1 + exp(team_strength - (opp_strength + home_court_avd)));
+  p = exp(team_strength - opp_strength) / (1 + exp(team_strength - opp_strength));
   }
   Win = rbinom(1, p);
 ")
@@ -272,92 +273,6 @@ sims |>
   guides(color="none")
 ```
 
-trying to add opp_strength as a state
-```{r}
-rproc2 <- Csnippet("
-  team_strength += beta1 *last5_bpm  - alpha * (team_strength - 1500) + rnorm(0, sigma);
-  opp_strength += beta2 * opp5_bpm - alpha * (opp_strength - 1500) + rnorm(0, sigma);
-  
-  double p_win = 1.0 / (1.0 + pow(10, (opp_strength - team_strength) / 400));
-  int sim_win = rbinom(1, p_win); 
-  
-  if (sim_win == 1) {
-    team_strength += 20 * (1 - 1/(1+pow(10, (opp_strength - team_strength)/400)));  
-  } else {
-    team_strength -= 20 * (1 - 1/(1+pow(10, (opp_strength - team_strength)/400)));  
-  }
-")
-
-dmeas2 <- Csnippet("
-  double p;
-  
-  double team_score = team_strength / 100.0;
-  double opp_score = opp_strength / 100.0;
-  double hca = home_court_avd / 100.0;
-
-  double max_val = fmax(team_score, opp_score);
-  
-  if (home == 1){
-    team_score += hca;
-  }
-  
-  p = exp(team_score - max_val) / (exp(team_score - max_val) + exp(opp_score - max_val));
-
-  lik = dbinom(Win, 1, p, give_log);
-")
-
-rmeas2 <- Csnippet("
-double p;
-  if (home == 1){
-  p = exp(home_court_avd + team_strength - opp_strength) / (1 + exp(home_court_avd + team_strength - opp_strength));
-  }
-  else{
-  p = exp(team_strength - (opp_strength + home_court_avd) ) / (1 + exp(team_strength - (opp_strength + home_court_avd)));
-  }
-  Win = rbinom(1, p);
-")
-
-init <- Csnippet("
-  team_strength = 1500;
-  opp_strength = 1500;
-")
-
-bpm %>% select(time,Win,Home,`Last 5 Games BPM`,`Opp Last5  BPM`,elo) -> red_bpm2
-
-nba_pomp2 <- pomp(
-  data = red_bpm2,
-  times = "time",
-  t0 = 1,
-  rprocess = euler(step.fun = rproc2, delta.t = 1),
-  rmeasure = rmeas2,
-  dmeasure = dmeas2,
-  rinit = init,
-  statenames = c("team_strength","opp_strength"),
-  paramnames = c("beta1", "beta2","sigma", "home_court_avd","alpha"),
-  covar = covariate_table(
-    times = red_bpm2$time,
-    last5_bpm = red_bpm2$`Last 5 Games BPM`,
-    opp5_bpm = red_bpm2$`Opp Last5  BPM`,
-    home = red_bpm2$Home
-  ),
-  covarnames = c("last5_bpm","opp5_bpm","home")
-)
-```
-
-```{r}
-nba_pomp2 |>
-  simulate(
-    params=c(beta1=.5,beta2=.5,sigma=1,home_court_avd=40,alpha=.05),
-    nsim=20,format="data.frame",include.data=TRUE
-  ) -> sims2
-
-sims2 |>
-  ggplot(aes(x=time,y=team_strength,group=.id,color=.id=="data"))+
-  geom_line()+
-  geom_line(aes(x=time,y=elo))+
-  guides(color="none")
-```
-
 local search
 ```{r}
 library(doFuture)
@@ -388,38 +303,6 @@ local_mifs_combined |>
   guides(color="none")+
   facet_wrap(~name,scales="free_y")
 ```
-
-local w/ two states
-```{r}
-library(doFuture)
-library(future.apply)
-library(iterators)
-
-coef(nba_pomp2) <- c(beta1=0.5, beta2=.5,sigma=1, home_court_avd=40,alpha=.05)
-fixed_params <- coef(nba_pomp2,c("sigma"))
-
-plan(multisession)
-ncpu <- nbrOfWorkers()
-local_mifs2 <- future_lapply(future.seed=TRUE,seq_len(ncpu), function(i) {
-  nba_pomp2 |>
-    mif2(
-      Np=700, Nmif=20,
-      cooling.fraction.50=0.5,
-      rw.sd=rw_sd(beta1=0.5, home_court_avd=40, beta2=0.5,alpha=.05)
-    )
-})
-
-local_mifs_combined2 <- do.call(c, local_mifs2)
-
-local_mifs_combined2 |>
-  traces(pars=c("loglik","beta1","beta2","sigma","home_court_avd","alpha")) |>
-  melt() |>
-  ggplot(aes(x=iteration,y=value,group=.L1,color=factor(.L1)))+
-  geom_line()+
-  guides(color="none")+
-  facet_wrap(~name,scales="free_y")
-```
-
 global
 ```{r}
 set.seed(2062379496)
@@ -447,76 +330,4 @@ foreach(guess=iter(guesses,"row"), .combine=rbind,
 } -> results
 
 ```
-
-```{r}
-results[results$loglik == max(results$loglik),]
-```
-
-running sim on the found best params
-```{r}
-nba_pomp |>
-  simulate(
-    params=c(beta1=1.644043,sigma=1,home_court_avd=85.28318,alpha=0.6171001),
-    nsim=20,format="data.frame",include.data=TRUE
-  ) -> sims
-
-sims |>
-  ggplot(aes(x=time,y=team_strength,group=.id,color=.id=="data"))+
-  geom_line()+
-  geom_line(aes(x=time,y=elo))+
-  guides(color="none")
-```
-
-comparing to lm model
-```{r}
-sigma <- summary(mod)$sigma
-sigma_lm <- sigma*sqrt((161-dim(model.matrix(mod))[2])/161) 
-cat("Loglik for Linear Regression:",sum(log(dnorm(x = bpm$elo, mean = predict(mod), sd = sigma_lm))))
-```
-
-global with two states
-```{r}
-set.seed(2062379496)
-runif_design(
-lower=c(beta1=0,home_court_avd=200,beta2=0,alpha=0),
-upper=c(beta1=1,home_court_avd=250,beta2=1,alpha=1),
-nseq=400
-) -> guesses
-
-mf1 <- local_mifs2[[1]]
-
-foreach(guess=iter(guesses,"row"), .combine=rbind,
-.options.future=list(seed=1270401374)
-) %dofuture% {
-  mf1 |>
-    mif2(params=c(guess,fixed_params)) |>
-    mif2(Nmif=20) -> mf
-  replicate(
-  10,
-  mf |> pfilter(Np=700) |> logLik()
-  ) |>
-    logmeanexp(se=TRUE) -> ll
-  mf |> coef() |> bind_rows() |>
-    bind_cols(loglik=ll[1],loglik.se=ll[2])
-} -> results2
-
-```
-
-```{r}
-results2[results2$loglik == max(results2$loglik),]
-```
-
-```{r}
-nba_pomp2 |>
-  simulate(
-    params=c(beta1=1.251947,beta2=2.474494,sigma=1,home_court_avd=74.55269,alpha=0.8598805),
-    nsim=20,format="data.frame",include.data=TRUE
-  ) -> sims2
-
-sims2 |>
-  ggplot(aes(x=time,y=team_strength,group=.id,color=.id=="data"))+
-  geom_line()+
-  geom_line(aes(x=time,y=elo))+
-  guides(color="none")
-```
-
+beta1 *last5_bpm - alpha * (team_strength - 1500)  + rnorm(0, sigma)

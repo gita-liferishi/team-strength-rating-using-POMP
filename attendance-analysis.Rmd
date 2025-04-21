@@ -93,13 +93,13 @@ for (i in 1:n) {
 
 # Remove unused rows
 rockets_elo_df <- rockets_elo_df[1:(row_counter - 1), ]
-
+rockets_elo_df["time"] <- seq(1,161,by=1)
 ```
 
 
 Reads updated data from BPM-new.csv which is updated with the Attendance values
 ```{r}
-bpm <- read.csv("C:/Users/Suvrorup Mukherjee/Documents/U-M/Winter 25/STATS 531/Final Project/STAT531-Final/data/BPM-new.csv")
+bpm <- read_excel("C:/Users/Suvrorup Mukherjee/Documents/U-M/Winter 25/STATS 531/Final Project/STAT531-Final/data/BPM-new.xlsx")
 
 bpm["elo"] <- rockets_elo_df$elo
 bpm["time"] <- rockets_elo_df$time
@@ -134,7 +134,7 @@ library(pomp)
 library(dbplyr)
 
 rproc <- Csnippet("
-  team_strength += beta1 *last5_bpm + beta2 * attendance_int - alpha * (team_strength - 1500)  + rnorm(0, sigma);
+  team_strength += beta1 *last5_bpm  - alpha * (team_strength - 1500)  + rnorm(0, sigma);
   
   double p_win = 1.0 / (1.0 + pow(10, (opp_strength - team_strength) / 400));
   int sim_win = rbinom(1, p_win); 
@@ -167,10 +167,10 @@ dmeas <- Csnippet("
 rmeas <- Csnippet("
 double p;
   if (home == 1){
-  p = exp(home_court_avd + team_strength - opp_strength) / (1 + exp(home_court_avd + team_strength - opp_strength));
+  p = exp(home_court_avd + team_strength +log(attendance) - opp_strength) / (1 + exp(home_court_avd + log(attendance) + team_strength - opp_strength));
   }
   else{
-  p = exp(team_strength - opp_strength) / (1 + exp(team_strength - opp_strength));
+  p = exp(team_strength - (opp_strength + home_court_avd + log(attendance)) ) / (1 + exp(team_strength - (opp_strength + home_court_avd + log(attendance))));
   }
   Win = rbinom(1, p);
 ")
@@ -179,7 +179,7 @@ init <- Csnippet("
   team_strength = 1500;
 ")
 
-bpm %>% select(time,Win,Home,`Last 5 Games BPM`,opp_elo,elo, home_attendance) -> red_bpm
+bpm %>% select(time,Win,Home,`Last 5 Games BPM`,opp_elo,elo, Attendance) -> red_bpm
 
 nba_pomp <- pomp(
     data = red_bpm,
@@ -190,7 +190,7 @@ nba_pomp <- pomp(
     dmeasure = dmeas,
     rinit = init,
     statenames = "team_strength",
-    paramnames = c("beta1", "beta2", "sigma", "home_court_avd","alpha"),
+    paramnames = c("beta1", "sigma", "home_court_avd","alpha"),
     partrans = parameter_trans(
         log = c("alpha")
     ),
@@ -199,9 +199,9 @@ nba_pomp <- pomp(
         last5_bpm = red_bpm$`Last 5 Games BPM`,
         opp_strength = red_bpm$opp_elo,
         home = red_bpm$Home,
-        attendance_int = red_bpm$home_attendance
+        attendance = red_bpm$Attendance
     ),
-    covarnames = c("last5_bpm","opp_strength","home", "attendance_int")
+    covarnames = c("last5_bpm","opp_strength","home", "attendance")
 )
 ```
 
@@ -221,7 +221,11 @@ sims |>
 
 Conducting Local Search:
 ```{r}
-coef(nba_pomp) <- c(beta1=0.5, beta2 =0.1, sigma=1, home_court_avd=40, alpha=0.05)
+library(doFuture)
+library(future.apply)
+library(iterators)
+
+coef(nba_pomp) <- c(beta1=0.5,  sigma=1, home_court_avd=40, alpha=0.05)
 fixed_params <- coef(nba_pomp,c("sigma"))
 
 plan(multisession)
@@ -231,18 +235,20 @@ local_mifs <- future_lapply(future.seed=TRUE,seq_len(ncpu), function(i) {
         mif2(
             Np=700, Nmif=20,
             cooling.fraction.50=0.5,
-            rw.sd=rw_sd(beta1=0.5, beta2=0.1, home_court_avd=40, alpha=0.05)
+            rw.sd=rw_sd(beta1=0.5, home_court_avd=40, alpha=0.05)
         )
 })
 
 local_mifs_combined <- do.call(c, local_mifs)
 
 local_mifs_combined |>
-    traces(pars=c("loglik","beta1","beta2","sigma","home_court_avd","alpha")) |>
+    traces(pars=c("loglik","beta1", "sigma","home_court_avd","alpha")) |>
     melt() |>
     ggplot(aes(x=iteration,y=value,group=.L1,color=factor(.L1)))+
     geom_line()+
     guides(color="none")+
     facet_wrap(~name,scales="free_y")
+
+mean(sapply(local_mifs_combined,logLik))
 
 ```
