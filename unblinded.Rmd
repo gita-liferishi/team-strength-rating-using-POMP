@@ -8,6 +8,7 @@ output:
     toc: yes
     toc_float:
       collapsed: true
+bibliography: ref.bib  
 ---
 
 ![Rockets SLAM Cover (Slam 254, 2025)](https://drive.google.com/uc?export=view&id=1pIHphgVGkqYD_Y30jos5B0bPQg4v1u3O)
