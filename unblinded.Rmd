@@ -660,7 +660,7 @@ foreach(guess=iter(guesses,"row"), .combine=rbind,
 results2[results2$loglik == max(results2$loglik),]
 ```
 
-```{r echo=FALSE}
+```{r echo=FALSE,include=TRUE}
 nba_pomp |> simulate(
   params = c(beta1 = 0.8958081, beta2 = 2.479902, sigma = 5, home_court_avd = 75.84778, alpha = 0.8331404),
   nsim = 20,
@@ -998,6 +998,8 @@ pred_over_models %>%
 
 ```
 
+
+
 ```{r echo=FALSE, include=TRUE}
 # ---------------- Plot 2: Accuracy ----------------
 ggplot(model_comparison, aes(x = Model, y = Accuracy * 100, fill = Model)) +
@@ -1016,7 +1018,7 @@ To our surprise POMP has resulted in far better performance compared to our base
 
 Let's see how the simulated predictions change over time compared to ELO.
 
-```{r echo=FALSE, include=TRUE}
+```{r echo=FALSE, warning=FALSE, include=TRUE}
 elo_probs <- sims1_best %>%
   filter(.id == "data") %>%
   transmute(time, elo_win_prob = 1 / (1 + 10^((opp_elo - elo) / 400)))
@@ -1090,7 +1092,7 @@ Can see that the underlying predictions follows very closely with ELO for all mo
 
 What about Type 1 and 2 errors
 
-```{r echo=TRUE, include=TRUE}
+```{r echo=FALSE,include=TRUE}
 # ---------------- Plot 1: Type I & II Error Rates ----------------
 error_rate_df <- model_comparison %>%
   pivot_longer(cols = c(Type1, Type2), names_to = "ErrorType", values_to = "Rate") %>%
