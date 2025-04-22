@@ -34,8 +34,10 @@ library(forecast)
 Basketball, like all sports, is wildly unpredictable. A game filled with runs of hot and cold streaks, any team can win on a given night. However, in all this chaos is there is there an underlying truth? Are some teams just flat out better than another? Can we measure by how much, and even predict games? Luckily there is a traditional method to try and capture such a state, ELO. This simple yet beautiful statistic, introduced by Arpad Elo, sets all teams or players at the same base rating and over time adjusts their score depending on the result of their game and how strong their opponent was (Wikipedia, 2025). This baseline statistic even allows for win probabilities to be calculated, and sets it as a solid foundation for the questions we're set to answer. However, this simple approach fails to account for other factors that go into the game of basketball. A a crucial player could get injured, and teams tend to play better on their home court, all of which would alter their ELO rating on that given day. In this report we'll introduce what we'll call POMP-ELO which will try and remedy these concerns by focusing on modeling the team strength and test its predict power for the Houston Rockets. We'll walk you through our data preparation, our model selection as well as comparison to other baseline models, and finally a conclusion on our results. 
 
 More formally we'll try and answer the questions:
-- Can we improve ELO's predictive power by introducing dynamic covariates?
-- Can we learn what variables are important in understanding team strength?
+
+\bullet Can we improve ELO's predictive power by introducing dynamic covariates?
+
+\bullet Can we learn what variables are important in understanding team strength?
 
 ## Data Preparation 
 
@@ -54,7 +56,7 @@ matchups <- read_excel("/Users/nicholaskim/Documents/STAT-531/final/data/matchup
 ```
 
 Code for ELO 
-```{r}
+```{r echo=TRUE, include=TRUE}
 update_elo <- function(rating1, rating2, result, K = 20) {
   E1 <- 1 / (1 + 10^((rating2 - rating1) / 400))  # Expected score for team 1
   E2 <- 1 / (1 + 10^((rating1 - rating2) / 400))  # Expected score for team 2
@@ -135,7 +137,7 @@ rockets_elo_df["time"] <- seq(1,164,by=1)
 ```
 
 The following ELO over time came out to look like
-```{r echo=FALSE}
+```{r echo=FALSE,include=TRUE}
 #adding in initial elo at time 0
 inital <- data.frame(date = as.Date(10/24/2023,
   format = "%m/%d/%y"),elo=1500,opp_elo=1500,win_p=.5,time=0)
@@ -157,7 +159,7 @@ bpm["opp_elo"] <- rockets_elo_df$opp_elo
 bpm["elo_win_p"] <- rockets_elo_df$win_p
 ```
 
-```{r echo=FALSE}
+```{r echo=FALSE,include=TRUE}
 bpm[1:10,c('Date','Total BPM','Last 5 Games BPM')]
 ```
 
@@ -189,7 +191,7 @@ where:
 
 This model allows us to assess the direct linear contribution of observable variables to Elo scores without recursive updates or stochastic latent states, in contrast to the dynamic modeling used in the POMP framework.
 
-```{r}
+```{r echo=TRUE,include=TRUE}
 log_elo <- glm(Win ~ `Last 5 Games BPM` + `Opp Last5  BPM` + Home, data = bpm, family = "binomial")
 summary(log_elo)
 ```
@@ -201,15 +203,15 @@ The baseline linear regression model estimates Elo ratings using observable team
 - Opponent's recent performance (`Opp Last5 BPM`) and home-court status are not statistically significant, indicating limited direct contribution to Elo in this linear framework.
 - The model explains 35.3% of the variance in Elo ($R^2 = 0.353$), suggesting that while observable features capture some structure, the remaining variation may be attributed to latent dynamics or factors not included in the model.
 
-```{r echo=FALSE}
+```{r echo=FALSE,include=TRUE}
 pred_win <- ifelse(predict(log_elo,type="response")>.5,1,0)
 
 print(paste("Pred Acc:",round(mean(pred_win==bpm$Win)*100,2),"%"))
 ```
 
 
-```{r echo=FALSE}
-plot(lm_elo,sub.caption=" ")
+```{r echo=FALSE,include=TRUE}
+plot(log_elo,sub.caption=" ")
 ```
 
 
@@ -222,10 +224,10 @@ This pattern supports the need for a time-dependent model like POMP or ARIMA, wh
 
 This supports the earlier observation that a purely linear model may be too rigid, failing to capture dynamic effects or latent processes influencing Elo. It reinforces the motivation for a POMP model or ARIMA, which can better accommodate time-evolving shocks and nonlinear error behavior.
 
-```{r echo=FALSE}
-hist(residuals(lm_elo), main = "Residuals Histogram", xlab = "Residuals")
+```{r echo=FALSE,include=TRUE}
+hist(residuals(log_elo), main = "Residuals Histogram", xlab = "Residuals")
 
-plot(predict(lm_elo), bpm$Win,
+plot(predict(log_elo), bpm$Win,
      main = "Predicted vs Actual Elo",
      xlab = "Predicted Elo",
      ylab = "Actual Elo")
@@ -245,7 +247,7 @@ E_{S} = \frac{1}{1+10^{\frac{TS - OP}{400}}}
 $$
 Yet how does it perform?
 
-```{r echo=FALSE}
+```{r echo=FALSE,include=TRUE}
 elo_pred <- ifelse(bpm$elo_win_p>.5,1,0)
 
 print(paste("Pred Acc:",round(mean(elo_pred==bpm$Win)*100,2),"%"))
@@ -299,7 +301,7 @@ We also defined p_win to be a separate state which will be used to store the res
 
 Code under 1.
 
-```{r}
+```{r echo=TRUE,include=TRUE}
 rproc <- Csnippet("
   team_strength += beta1 *last5_bpm - alpha * (team_strength - 1500)  + rnorm(0, sigma);
   
@@ -373,7 +375,7 @@ nba_pomp <- pomp(
 ```
 
 Change under 2.
-```{r}
+```{r echo=TRUE,include=TRUE}
 rproc2 <- Csnippet("
   team_strength += beta1 *last5_bpm  - alpha * (team_strength - 1500) + rnorm(0, sigma);
   opp_strength += beta2 * opp5_bpm - alpha * (opp_strength - 1500) + rnorm(0, sigma);
@@ -395,7 +397,7 @@ init2 <- Csnippet("
 ")
 ```
 
-```{r}
+```{r echo=TRUE,include=TRUE}
 bpm %>% select(time,Win,Home,`Last 5 Games BPM`,`Opp Last5  BPM`,elo) -> red_bpm2
 
 nba_pomp2 <- pomp(
@@ -425,7 +427,7 @@ The following are simulations for both models under some set parameter values.
 Under Model 1
 
 
-```{r echo=FALSE, warning=FALSE}
+```{r echo=FALSE, warning=FALSE,include=TRUE}
 nba_pomp |> simulate(
   params = c(beta1 = 0.5, sigma = 5, home_court_avd = 40, alpha = 0.05),
   nsim = 20,
@@ -442,7 +444,7 @@ sims1 |>
 ```
 
 Looking at predictive performance:
-```{r echo=FALSE}
+```{r echo=FALSE,include=TRUE}
 true_win <- sims1 %>%
   filter(.id == "data") %>%
   arrange(time) %>%
@@ -465,7 +467,7 @@ Model 2
 
 
 
-```{r echo=FALSE, warning=FALSE}
+```{r echo=FALSE, warning=FALSE,include=TRUE}
 nba_pomp2 |>
   simulate(
     params=c(beta1=.5,beta2=.5,sigma=5,home_court_avd=40,alpha=.05),
@@ -484,7 +486,7 @@ sims2 |>
 We can see that both models seem to capture the trend of the ELO with Model 1 having less variance. This is to be expected as in Model 2 we've introduced another level of randomness.
 
 Looking at this models predictive performance
-```{r echo=FALSE}
+```{r echo=FALSE,include=TRUE}
 true_win <- sims2 %>%
   filter(.id == "data") %>%
   arrange(time) %>%
@@ -511,7 +513,7 @@ Hopefully, under better model parameters we can see an improvement in its predic
 
 Model 1
 
-```{r echo=FALSE}
+```{r echo=FALSE,include=TRUE}
 coef(nba_pomp) <- c(beta1=0.5, sigma=5, home_court_avd=40, alpha=0.05)
 fixed_params <- coef(nba_pomp,c("sigma"))
 
@@ -540,7 +542,7 @@ local_mifs_combined |>
 Model 2
 
 
-```{r echo=FALSE}
+```{r echo=FALSE,include=TRUE}
 coef(nba_pomp2) <- c(beta1=0.5, beta2=.5,sigma=5, home_court_avd=40,alpha=.05)
 fixed_params <- coef(nba_pomp2,c("sigma"))
 
@@ -572,7 +574,7 @@ From just these local searches we can see that Model 2 have more noisy estimates
 
 Model 1
 
-```{r echo=FALSE}
+```{r echo=FALSE,include=TRUE}
 set.seed(2062379496)
 runif_design(
 lower=c(beta1=0,home_court_avd=200,alpha=0),
@@ -601,7 +603,7 @@ results[results$loglik == max(results$loglik),]
 ```
 
 Running simulations on these parameters
-```{r echo=FALSE}
+```{r echo=FALSE,include=TRUE}
 nba_pomp |> simulate(
   params = c(beta1 = 1.84984, sigma = 5, home_court_avd = 89.33528, alpha = 0.5705353),
   nsim = 20,
@@ -630,7 +632,7 @@ print(paste("Pred Acc:",round(errors1$acc,2)*100,"%"))
 Model 2
 
 
-```{r echo=FALSE}
+```{r echo=FALSE, include=TRUE}
 set.seed(2062379496)
 runif_design(
 lower=c(beta1=0,home_court_avd=200,beta2=0,alpha=0),
@@ -698,7 +700,7 @@ bpm_att["opp_elo"] <- rockets_elo_df$opp_elo
 ```
 
 Let us visualize how the Home and Attendance are related to each other and give a sense of team support
-```{r echo=FALSE}
+```{r echo=FALSE, include=TRUE}
 ggplot(bpm_att, aes(x = factor(Home, labels = c("Away", "Home")), y = Attendance)) +
     geom_boxplot(fill = "skyblue") +
     labs(x = "Game Location", y = "Attendance", title = "Attendance by Game Location")
@@ -706,11 +708,11 @@ ggplot(bpm_att, aes(x = factor(Home, labels = c("Away", "Home")), y = Attendance
 
 Similarly, let us observe how the win can be affected using an interaction between the home and attendance through both ARMA and a linear regression model
 
-```{r}
+```{r echo=TRUE,include=TRUE}
 model <- glm(Win ~`Last 5 Games BPM` + `Opp Last5  BPM` + Home * log(Attendance), data = bpm_att, family = "binomial" )
 summary(model)
 ```
-```{r echo=FALSE}
+```{r echo=FALSE, include=TRUE}
 pred_win_att <- ifelse(predict(model,type="response")>.5,1,0)
 
 print(paste("Pred Acc:",round(mean(pred_win_att==bpm$Win)*100,2),"%"))
@@ -719,7 +721,7 @@ print(paste("Pred Acc:",round(mean(pred_win_att==bpm$Win)*100,2),"%"))
 As we can see the inclusion of Attedance increased our models accuracy compared to the logistic regression without it! Let's see if we see similarly improvements in our POMP.
 
 Now let us finally update the rmeas and the pomp model accordingly. Building off of Model 1 as its a simpler model with less noise in this process. Here we'll simply adjust home_court_avd using home attendance numbers as that is a good measure in how many people actually follow and support the team. We ended up taking the log of this number as if adding without this rescaling the predicted TS would be much larger than what our actual ELO is measured under. Due to Attendance being in the 1000s.
-```{r}
+```{r echo=TRUE, include=TRUE}
 rmeas_att <- Csnippet("
 double p;
   if (home == 1){
@@ -758,7 +760,7 @@ nba_pomp_att <- pomp(
 ```
 
 Simulation
-```{r echo=FALSE, warning=FALSE}
+```{r echo=FALSE, warning=FALSE, include=TRUE}
 nba_pomp_att |>
     simulate(
         params=c(beta1=.5, sigma=1,home_court_avd=40,alpha=.05),
@@ -773,7 +775,7 @@ sims_att |>
     labs(title="Simulation Over Fixed Parameters Attendence POMP")
 ```
 
-```{r echo=FALSE}
+```{r echo=FALSE, include=TRUE}
 true_win <- sims1 %>%
   filter(.id == "data") %>%
   arrange(time) %>%
@@ -793,7 +795,7 @@ print(paste("Pred Acc:",round(errors$acc,2)*100,"%"))
 ```
 
 Conducting Local Search:
-```{r echo=FALSE}
+```{r echo=FALSE, include=TRUE}
 coef(nba_pomp_att) <- c(beta1=0.5, sigma=5, home_court_avd=40, alpha=0.05)
 fixed_params <- coef(nba_pomp_att,c("sigma"))
 
@@ -821,7 +823,7 @@ local_mifs_combined |>
 ```
 
 Global search
-```{r echo=FALSE}
+```{r echo=FALSE, include=TRUE}
 set.seed(2062379496)
 runif_design(
 lower=c(beta1=0,home_court_avd=200,alpha=0),
@@ -852,7 +854,7 @@ results_att[results_att$loglik == max(results_att$loglik),]
 
 
 
-```{r echo=FALSE}
+```{r echo=FALSE, include=TRUE}
 nba_pomp |> simulate(
   params = c(beta1 = 1.84984, sigma = 5, home_court_avd = 89.33528, alpha = 0.5705353),
   nsim = 20,
@@ -966,7 +968,7 @@ model_comparison <- tibble::tibble(
 
 ```
 
-```{r echo=FALSE, warning=FALSE}
+```{r echo=FALSE, warning=FALSE, include=TRUE}
 
 pred_over_models <- data.frame(Logisitc = round(mean(pred_win==bpm$Win)*100,2),
            Logisitc_att = round(mean(pred_win_att==bpm$Win)*100,2),
@@ -996,7 +998,7 @@ pred_over_models %>%
 
 ```
 
-```{r echo=FALSE}
+```{r echo=FALSE, include=TRUE}
 # ---------------- Plot 2: Accuracy ----------------
 ggplot(model_comparison, aes(x = Model, y = Accuracy * 100, fill = Model)) +
   geom_bar(stat = "identity", color = "black") +
@@ -1014,7 +1016,7 @@ To our surprise POMP has resulted in far better performance compared to our base
 
 Let's see how the simulated predictions change over time compared to ELO.
 
-```{r echo=FALSE}
+```{r echo=FALSE, include=TRUE}
 elo_probs <- sims1_best %>%
   filter(.id == "data") %>%
   transmute(time, elo_win_prob = 1 / (1 + 10^((opp_elo - elo) / 400)))
@@ -1088,7 +1090,7 @@ Can see that the underlying predictions follows very closely with ELO for all mo
 
 What about Type 1 and 2 errors
 
-```{r}
+```{r echo=TRUE, include=TRUE}
 # ---------------- Plot 1: Type I & II Error Rates ----------------
 error_rate_df <- model_comparison %>%
   pivot_longer(cols = c(Type1, Type2), names_to = "ErrorType", values_to = "Rate") %>%
