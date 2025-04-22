@@ -182,65 +182,36 @@ Since we'll be using POMP-ELO to test its accuracy in predictive the outcome of 
 We'll define a logistic regression model to serve as a baseline of our understanding how ELO ratings relate to team performance indicators, independent of any latent process. The model is specified as:
 
 $$
-\text{Win}_n = \gamma_0 + \gamma_1 \cdot LVBPM_n + \gamma_2 \cdot OLVBPM_n + \gamma_3 \cdot Home_n + \gamma_4 \cdot Win_n + \varepsilon_n
+\log \left( \frac{P(Win_n = 1)}{P(Win_n = 0)} \right) = \gamma_0 + \gamma_1 \cdot LVBPM_n + \gamma_2 \cdot OLVBPM_n + \gamma_3 \cdot Home_n + \varepsilon_n.
 $$
 
 where:
 
-- $Win_n$ is the predicted result of the game $n$ as a binary 
-- $LVBPM_n$ is the team's average Total BPM over the last 5 games  
-- $OLVBPM_n$ is the opponent's average Total BPM over their last 5 games  
-- $Home_n$ is a binary indicator for whether the team played at home  
-- $\varepsilon_n$ is the residual error term  
+- $Win_n$ is the predicted result of the game $n$ as a binary.
+- $LVBPM_n$ is the team's average Total BPM over the last 5 games.
+- $OLVBPM_n$ is the opponent's average Total BPM over their last 5 games.
+- $Home_n$ is a binary indicator for whether the team played at home.
+- $\varepsilon_n$ is the residual error term.
 
-This model allows us to assess the direct linear contribution of observable variables to Elo scores without recursive updates or stochastic latent states, in contrast to the dynamic modeling used in the POMP framework.
+This model allows us to assess the direct contribution of observable team performance indicators to the probability of winning a game, without assuming latent states or time dependence.
 
 ```{r echo=TRUE,include=TRUE}
 log_elo <- glm(Win ~ `Last 5 Games BPM` + `Opp Last5  BPM` + Home, data = bpm, family = "binomial")
 summary(log_elo)
 ```
 
-The baseline linear regression model estimates Elo ratings using observable team performance indicators:
+The logistic regression model estimates the probability of winning using observable team performance indicators:
 
-- Team recent performance (`Last 5 Games BPM`) is a strong and statistically significant predictor of Elo, with each point of BPM associated with an average increase of 3.94 Elo points ($p < 0.001$).
-- Winning the game also has a significant positive impact, associated with an average increase of 18.84 Elo points ($p = 0.004$).
-- Opponent's recent performance (`Opp Last5 BPM`) and home-court status are not statistically significant, indicating limited direct contribution to Elo in this linear framework.
-- The model explains 35.3% of the variance in Elo ($R^2 = 0.353$), suggesting that while observable features capture some structure, the remaining variation may be attributed to latent dynamics or factors not included in the model.
+- Home-court advantage is a statistically significant predictor ($p = 0.0049$), increasing the log-odds of winning by 0.94.
+- Opponent recent performance (`Opp Last5 BPM`) is also significant and negative ($p = 0.0075$), suggesting stronger opponents reduce win probability.
+- The team’s own recent performance (`Last 5 Games BPM`) is not statistically significant.
+- The model achieves a prediction accuracy of 64.02%, indicating that simple features explain some variation, but likely omit important latent or temporal structure.
 
 ```{r echo=FALSE,include=TRUE}
 pred_win <- ifelse(predict(log_elo,type="response")>.5,1,0)
 
 print(paste("Pred Acc:",round(mean(pred_win==bpm$Win)*100,2),"%"))
 ```
-
-
-```{r echo=FALSE,include=TRUE}
-plot(log_elo,sub.caption=" ")
-```
-
-
-
-1. The residuals vs fitted plot shows no strong non-linearity, but there is noticeable heteroscedasticity and clustering, especially around the center. This suggests unaccounted structure in the residuals, likely from temporal correlation or hidden states that vary across time.
-
-This pattern supports the need for a time-dependent model like POMP or ARIMA, where past performance, dynamics, and latent factors can be explicitly modeled to capture the evolving nature of Elo.
-
-2. The Q-Q plot shows that the residuals are approximately normal, with slight deviations in the tails. This suggests that while the normality assumption mostly holds, there are some mild outliers or unmodeled structure at the extremes.
-
-This supports the earlier observation that a purely linear model may be too rigid, failing to capture dynamic effects or latent processes influencing Elo. It reinforces the motivation for a POMP model or ARIMA, which can better accommodate time-evolving shocks and nonlinear error behavior.
-
-```{r echo=FALSE,include=TRUE}
-hist(residuals(log_elo), main = "Residuals Histogram", xlab = "Residuals")
-
-plot(predict(log_elo), bpm$Win,
-     main = "Predicted vs Actual Elo",
-     xlab = "Predicted Elo",
-     ylab = "Actual Elo")
-abline(0, 1, col = "red")
-```
-
-The residual diagnostics indicate that the linear model does not fit the Elo data well. The residuals range from approximately $-100$ to $+100$, suggesting substantial unexplained variation. The Residuals vs Fitted plot shows mild heteroscedasticity and scattered structure, while the Q-Q plot reveals slight deviations in the tails, pointing to the presence of outliers or latent dynamics not captured by the model.
-
-These observations suggest that a static linear regression is insufficient for modeling Elo, which is inherently time-dependent and recursively updated. This motivates the use of more appropriate models such as the POMP framework, which treats team strength as a latent process evolving over time, or ARIMA models, which directly account for autocorrelation and temporal structure in observed Elo scores.
 
 ### Base ELO
 
