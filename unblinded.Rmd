@@ -164,9 +164,13 @@ bpm[1:10,c('Date','Total BPM','Last 5 Games BPM')]
 ```
 
 We'll introduce three POMP models: 
+
 1. Opp ELO as a covariate 
+
 2. Opp ELO as a state itself
+
 3. Attendance effect on home_court_avd
+
 This will become more clear in our POMP section but under the 2nd condition we'll use the Average Last 5 BPM for the opponent to then adjust the Opponent strength, while under the 1st it'll not fluctuate as it's not a random process like team strength. 
 
 ## Baseline Models
