@@ -12,7 +12,7 @@ output:
 
 ![Rockets SLAM Cover (Slam 254, 2025)](https://drive.google.com/uc?export=view&id=1pIHphgVGkqYD_Y30jos5B0bPQg4v1u3O)
 
-```{r setup, warning=FALSE, message=FALSE}
+```{r setup, warning=FALSE, message=FALSE, include=FALSE}
 knitr::opts_chunk$set(include = FALSE)
 library(tidyverse)
 library(readxl)
